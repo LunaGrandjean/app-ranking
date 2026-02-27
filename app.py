@@ -30,14 +30,15 @@ def excel_date_to_date(x):
 
     return dtv.date() if not pd.isna(dtv) else pd.NaT
 
+# =========================
+# 1) Extract workbook (raw FFTir Excel -> long df)
+# =========================
 def squish(x) -> str:
     if pd.isna(x):
         return ""
     return re.sub(r"\s+", " ", str(x)).strip()
 
-# =========================
-# 1) Extract workbook (raw FFTir Excel -> long df)
-# =========================
+
 def extract_sheet_long(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
     raw = raw.copy()
 
@@ -51,13 +52,12 @@ def extract_sheet_long(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
             break
 
     if header_row is None:
-        # fallback si jamais ça bouge : renvoie vide (et tu verras dans "Données clean")
         return pd.DataFrame(columns=["Athlete","Category","Competition","Date","Score","Rank","Sheet"])
 
     athlete_start_row = header_row + 1
-    comp_row = max(0, header_row - 2)  # comme ton fichier: compet est 2 lignes au-dessus
+    comp_row = max(0, header_row - 2)  # souvent la ligne des compétitions est 2 lignes au-dessus
 
-    # --- 2) Trouver la 1ère colonne "Score" des compétitions sur la ligne header ---
+    # --- 2) Colonnes "Score" sur la ligne header ---
     score_cols = []
     for c in range(raw.shape[1]):
         if squish(raw.iat[header_row, c]).lower() == "score":
@@ -67,8 +67,6 @@ def extract_sheet_long(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
         return pd.DataFrame(columns=["Athlete","Category","Competition","Date","Score","Rank","Sheet"])
 
     first_comp_col = score_cols[0]
-
-    # Step: distance entre 2 colonnes "Score" (souvent 3)
     step = (score_cols[1] - score_cols[0]) if len(score_cols) >= 2 else 3
 
     # --- Athlètes / Catégories ---
@@ -85,7 +83,7 @@ def extract_sheet_long(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
         comp_date = excel_date_to_date(comp_date_raw)
 
         score = pd.to_numeric(raw.iloc[athlete_start_row:, col], errors="coerce")
-        rank  = pd.to_numeric(raw.iloc[athlete_start_row:, col + 1], errors="coerce")
+        rank = pd.to_numeric(raw.iloc[athlete_start_row:, col + 1], errors="coerce")
 
         df = pd.DataFrame({
             "Athlete": athletes,
@@ -97,15 +95,18 @@ def extract_sheet_long(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
             "Sheet": sheet_name
         })
 
-        df = df[df["Athlete"].notna()]                 # athlete non vide
-        df = df[~(df["Score"].isna() & df["Rank"].isna())]  # comme R: si score & rank NA -> skip
+        # comme R: si score ET rank NA => on enlève
+        df = df[df["Athlete"].notna()]
+        df = df[~(df["Score"].isna() & df["Rank"].isna())]
 
         parts.append(df)
 
-        if not parts:
+    # <-- IMPORTANT : ce bloc est EN DEHORS de la boucle for
+    if not parts:
         return pd.DataFrame(columns=["Athlete","Category","Competition","Date","Score","Rank","Sheet"])
-    
-    return pd.concat(parts, ignore_index=True)
+
+    out = pd.concat(parts, ignore_index=True)
+    return out
 
 def extract_workbook(file_bytes: bytes) -> pd.DataFrame:
     # ExcelFile + engine forcé
@@ -598,6 +599,7 @@ if run:
 
 
         
+
 
 
 
