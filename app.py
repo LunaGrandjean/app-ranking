@@ -103,9 +103,9 @@ def extract_sheet_long(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
         parts.append(df)
 
     if not parts:
-        return pd.DataFrame(columns=["Athlete","Category","Competition","Date","Score","Rank","Sheet"])
+    return pd.DataFrame(columns=["Athlete","Category","Competition","Date","Score","Rank","Sheet"])
 
-    return pd.concat(parts, ignore_index=True) out
+return pd.concat(parts, ignore_index=True)
 
 def extract_workbook(file_bytes: bytes) -> pd.DataFrame:
     # ExcelFile + engine forcé
@@ -598,6 +598,7 @@ if run:
 
 
         
+
 
 
 
