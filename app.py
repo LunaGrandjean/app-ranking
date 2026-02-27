@@ -5,6 +5,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+EXCEL_ENGINE = "openpyxl"
+
 # =========================
 # Utils: date conversion
 # =========================
@@ -73,15 +75,17 @@ def extract_sheet_long(raw: pd.DataFrame, sheet_name: str,
 
 
 def extract_workbook(file_bytes: bytes) -> pd.DataFrame:
-    xf = pd.ExcelFile(io.BytesIO(file_bytes))
+    bio = io.BytesIO(file_bytes)
+    xf = pd.ExcelFile(bio, engine=EXCEL_ENGINE)
+
     dfs = []
     for sheet in xf.sheet_names:
-        raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet, header=None)
         try:
+            raw = pd.read_excel(bio, sheet_name=sheet, header=None, engine=EXCEL_ENGINE)
             dfs.append(extract_sheet_long(raw, sheet))
         except Exception:
-            # on skip silencieusement si une sheet est "bizarre"
             pass
+
     if not dfs:
         return pd.DataFrame(columns=["Athlete","Category","Score","Rank","Competition","Date","Sheet"])
     return pd.concat(dfs, ignore_index=True)
@@ -149,9 +153,10 @@ def fix_names(df: pd.DataFrame) -> pd.DataFrame:
 #    Each block = two columns: threshold_score, points
 # =========================
 def parse_scale_from_excel(file_bytes: bytes, sheet_name: str = None) -> pd.DataFrame:
-    xf = pd.ExcelFile(io.BytesIO(file_bytes))
+    bio = io.BytesIO(file_bytes)
+    xf = pd.ExcelFile(bio, engine=EXCEL_ENGINE)
     use_sheet = sheet_name or xf.sheet_names[0]
-    raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=use_sheet, header=None)
+    raw = pd.read_excel(bio, sheet_name=use_sheet, header=None, engine=EXCEL_ENGINE)
 
     # Find headers like "50m Women" in the grid
     headers = {}
@@ -389,7 +394,7 @@ else:
     if ext == "csv":
         final_points_df = pd.read_csv(fp_upload)
     else:
-        final_points_df = pd.read_excel(fp_upload)
+        final_points_df = pd.read_excel(fp_upload, engine=EXCEL_ENGINE)
 
 final_points_df = st.data_editor(final_points_df, num_rows="dynamic", use_container_width=True)
 
@@ -413,7 +418,7 @@ if coeff_upload is None:
     coeff_df = default_coeff_table()
 else:
     ext = coeff_upload.name.split(".")[-1].lower()
-    coeff_df = pd.read_csv(coeff_upload) if ext == "csv" else pd.read_excel(coeff_upload)
+    coeff_df = pd.read_csv(coeff_upload) if ext == "csv" else pd.read_excel(coeff_upload, engine=EXCEL_ENGINE)
 
 coeff_df = st.data_editor(coeff_df, num_rows="dynamic", use_container_width=True)
 
@@ -552,6 +557,7 @@ if run:
             file_name="tableau_final.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
         
