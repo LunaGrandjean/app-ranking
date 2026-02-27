@@ -373,6 +373,12 @@ def make_final_table(df: pd.DataFrame) -> pd.DataFrame:
 st.set_page_config(page_title="Ranking App", layout="wide")
 st.title("📊 Ranking App (Excel → paramètres → tableau final)")
 
+try:
+    import openpyxl
+    st.caption(f"✅ openpyxl {openpyxl.__version__} | pandas {pd.__version__}")
+except Exception as e:
+    st.error(f"❌ openpyxl import error: {e}")
+
 colA, colB = st.columns(2)
 
 with colA:
@@ -561,3 +567,4 @@ if run:
 
 
         
+
