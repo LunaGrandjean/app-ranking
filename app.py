@@ -35,16 +35,22 @@ def excel_date_to_date(x):
 # 1) Extract workbook (raw FFTir Excel -> long df)
 # =========================
 def extract_sheet_long(raw: pd.DataFrame, sheet_name: str,
-                       comp_row: int = 7, athlete_start_row: int = 10,
-                       first_comp_col: int = 5, step: int = 3) -> pd.DataFrame:
-    # athletes / categories
-    athletes = raw.iloc[athlete_start_row:, 1].astype(str).str.strip().replace({"nan": np.nan})
-    categories = raw.iloc[athlete_start_row:, 0].astype(str).str.strip().replace({"nan": np.nan})
+                       comp_row: int = 2, athlete_start_row: int = 5,
+                       first_comp_col: int = 4, step: int = 3) -> pd.DataFrame:
+    # Tout en texte (comme col_types="text")
+    raw = raw.copy()
+
+    # Athlètes / catégories
+    athletes = raw.iloc[athlete_start_row:, 1].astype(str).str.strip().replace({"nan": np.nan, "": np.nan})
+    categories = raw.iloc[athlete_start_row:, 0].astype(str).str.strip().replace({"nan": np.nan, "": np.nan})
 
     parts = []
-    for col in range(first_comp_col, raw.shape[1], step):
+    # comme seq(5, ncol(df)-1, by=3) => 0-based: range(4, ncol-1, 3)
+    for col in range(first_comp_col, max(first_comp_col, raw.shape[1] - 1), step):
         comp_name = raw.iat[comp_row, col]
         comp_name = "" if pd.isna(comp_name) else str(comp_name).strip()
+
+        # skip si pas de nom de compet
         if comp_name == "":
             continue
 
@@ -52,25 +58,28 @@ def extract_sheet_long(raw: pd.DataFrame, sheet_name: str,
         comp_date = excel_date_to_date(comp_date_raw)
 
         score = pd.to_numeric(raw.iloc[athlete_start_row:, col], errors="coerce")
-        rank = pd.to_numeric(raw.iloc[athlete_start_row:, col + 1], errors="coerce") if col + 1 < raw.shape[1] else np.nan
+        rank  = pd.to_numeric(raw.iloc[athlete_start_row:, col + 1], errors="coerce")
 
         df = pd.DataFrame({
             "Athlete": athletes,
             "Category": categories,
-            "Score": score,
-            "Rank": rank,
             "Competition": comp_name,
             "Date": comp_date,
+            "Score": score,
+            "Rank": rank,
             "Sheet": sheet_name
         })
-        df = df[df["Athlete"].notna() & (df["Athlete"] != "")]
+
+        # comme R: si NA score ET NA rank => on enlève
+        df = df[~(df["Score"].isna() & df["Rank"].isna())]
+        df = df[df["Athlete"].notna()]
+
         parts.append(df)
 
     if not parts:
-        return pd.DataFrame(columns=["Athlete","Category","Score","Rank","Competition","Date","Sheet"])
+        return pd.DataFrame(columns=["Athlete","Category","Competition","Date","Score","Rank","Sheet"])
 
     out = pd.concat(parts, ignore_index=True)
-    out = out.dropna(subset=["Score","Rank"], how="all").reset_index(drop=True)
     return out
 
 
@@ -81,13 +90,14 @@ def extract_workbook(file_bytes: bytes) -> pd.DataFrame:
     dfs = []
     for sheet in xf.sheet_names:
         try:
-            raw = pd.read_excel(bio, sheet_name=sheet, header=None, engine=EXCEL_ENGINE)
+            # dtype=object pour garder texte brut, header=None comme avant
+            raw = pd.read_excel(bio, sheet_name=sheet, header=None, engine=EXCEL_ENGINE, dtype=object)
             dfs.append(extract_sheet_long(raw, sheet))
         except Exception:
             pass
 
     if not dfs:
-        return pd.DataFrame(columns=["Athlete","Category","Score","Rank","Competition","Date","Sheet"])
+        return pd.DataFrame(columns=["Athlete","Category","Competition","Date","Score","Rank","Sheet"])
     return pd.concat(dfs, ignore_index=True)
 
 
@@ -561,5 +571,6 @@ if run:
 
 
         
+
 
 
