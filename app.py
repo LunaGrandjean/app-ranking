@@ -7,6 +7,9 @@ import streamlit as st
 
 EXCEL_ENGINE = "openpyxl"
 
+# Permanent scale: 50 -> 100 (double everything)
+POINTS_FACTOR = 2.0  # Perf: 35->70, Final: 15->30, Total: 50->100
+
 # =========================
 # Utils: date conversion
 # =========================
@@ -29,6 +32,7 @@ def excel_date_to_date(x):
         dtv = pd.to_datetime(s, errors="coerce", dayfirst=True)
 
     return dtv.date() if not pd.isna(dtv) else pd.NaT
+
 
 # =========================
 # 1) Extract workbook (raw FFTir Excel -> long df)
@@ -101,12 +105,12 @@ def extract_sheet_long(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
 
         parts.append(df)
 
-    # <-- IMPORTANT : ce bloc est EN DEHORS de la boucle for
     if not parts:
         return pd.DataFrame(columns=["Athlete","Category","Competition","Date","Score","Rank","Sheet"])
 
     out = pd.concat(parts, ignore_index=True)
     return out
+
 
 def extract_workbook(file_bytes: bytes) -> pd.DataFrame:
     # ExcelFile + engine forcé
@@ -116,11 +120,13 @@ def extract_workbook(file_bytes: bytes) -> pd.DataFrame:
     for sheet in xf.sheet_names:
         try:
             # IMPORTANT: recréer BytesIO à chaque read_excel (évite les soucis de curseur)
-            raw = pd.read_excel(io.BytesIO(file_bytes),
-                                sheet_name=sheet,
-                                header=None,
-                                engine=EXCEL_ENGINE,
-                                dtype=object)
+            raw = pd.read_excel(
+                io.BytesIO(file_bytes),
+                sheet_name=sheet,
+                header=None,
+                engine=EXCEL_ENGINE,
+                dtype=object
+            )
             dfs.append(extract_sheet_long(raw, sheet))
         except Exception:
             pass
@@ -129,13 +135,13 @@ def extract_workbook(file_bytes: bytes) -> pd.DataFrame:
         return pd.DataFrame(columns=["Athlete","Category","Competition","Date","Score","Rank","Sheet"])
     return pd.concat(dfs, ignore_index=True)
 
+
 # =========================
 # 2) Competition coefficient (as in R)
 # =========================
 def add_comp_coeff(df: pd.DataFrame, coeff_table: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
-    # clean table
     ct = coeff_table.copy()
     ct.columns = [c.strip().upper() for c in ct.columns]
 
@@ -146,9 +152,7 @@ def add_comp_coeff(df: pd.DataFrame, coeff_table: pd.DataFrame) -> pd.DataFrame:
     ct["COEFF"] = pd.to_numeric(ct["COEFF"], errors="coerce")
     ct = ct.dropna(subset=["MATCH", "COEFF"])
 
-    # build regex rules (word boundary like R \\b)
     rules = [(rf"\b{re.escape(m)}\b", float(v)) for m, v in zip(ct["MATCH"], ct["COEFF"])]
-
     comp = df["Competition"].fillna("").astype(str)
 
     def coeff_one(s: str) -> float:
@@ -162,13 +166,11 @@ def add_comp_coeff(df: pd.DataFrame, coeff_table: pd.DataFrame) -> pd.DataFrame:
 
 
 # =========================
-# 3) Name fixes 
+# 3) Name fixes
 # =========================
 def fix_names(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    repl = {
-        r"^BRIAN Julie$": "BRIAND Julie",
-    }
+    repl = {r"^BRIAN Julie$": "BRIAND Julie"}
     df["Athlete"] = df["Athlete"].replace(repl, regex=True)
     df["Athlete"] = df["Athlete"].replace({
         "BRACKMAN Anceline": "BRACKMAN Ancéline",
@@ -179,16 +181,12 @@ def fix_names(df: pd.DataFrame) -> pd.DataFrame:
         "BONNET Marcellin": "BONNET Marcelin",
         "CHOLET Mathis": "CHOLET Matis",
     })
-    # cas "IUNG Antoine*" (regex)
     df["Athlete"] = df["Athlete"].str.replace(r"IUNG Antoine\*+", "IUNG Antoine", regex=True)
     return df
 
 
 # =========================
-# 4) Parse "point scale" table (your screenshot)
-#    Expected blocks: "50m Women", "50m Men", "50m Junior Women", "50m Junior Men"
-#                     "10m Women", "10m Men", "10m Junior Women", "10m Junior Men"
-#    Each block = two columns: threshold_score, points
+# 4) Parse "point scale" table
 # =========================
 def parse_scale_from_excel(file_bytes: bytes, sheet_name: str = None) -> pd.DataFrame:
     bio = io.BytesIO(file_bytes)
@@ -196,20 +194,22 @@ def parse_scale_from_excel(file_bytes: bytes, sheet_name: str = None) -> pd.Data
     use_sheet = sheet_name or xf.sheet_names[0]
     raw = pd.read_excel(bio, sheet_name=use_sheet, header=None, engine=EXCEL_ENGINE)
 
-    # Find headers like "50m Women" in the grid
+    wanted = {
+        "50m Women","50m Men","50m Junior Women","50m Junior Men",
+        "10m Women","10m Men","10m Junior Women","10m Junior Men"
+    }
+
     headers = {}
     for r in range(raw.shape[0]):
         for c in range(raw.shape[1]):
             v = raw.iat[r, c]
             if isinstance(v, str):
                 t = v.strip()
-                if t in {"50m Women","50m Men","50m Junior Women","50m Junior Men",
-                         "10m Women","10m Men","10m Junior Women","10m Junior Men"}:
+                if t in wanted:
                     headers[t] = (r, c)
 
     rows = []
     for title, (r0, c0) in headers.items():
-        # data starts next row; two columns: score at c0, points at c0+1
         rr = r0 + 1
         while rr < raw.shape[0]:
             score = raw.iat[rr, c0]
@@ -226,14 +226,12 @@ def parse_scale_from_excel(file_bytes: bytes, sheet_name: str = None) -> pd.Data
     if scale.empty:
         return scale
 
-    # Ensure descending by MinScore for easy lookup (>=)
     scale = scale.sort_values(["ScaleKey","MinScore"], ascending=[True, False]).reset_index(drop=True)
     return scale
 
 
 # =========================
-# 5) Apply scale: score -> points (step function)
-#    Rule: points for the highest MinScore <= score
+# 5) Apply scale: score -> points
 # =========================
 def score_to_points(score: float, scale_df: pd.DataFrame, key: str) -> float:
     if pd.isna(score):
@@ -241,50 +239,42 @@ def score_to_points(score: float, scale_df: pd.DataFrame, key: str) -> float:
     sub = scale_df[scale_df["ScaleKey"] == key]
     if sub.empty:
         return np.nan
-    # find first row where score >= MinScore (since MinScore sorted desc)
     hit = sub[sub["MinScore"] <= score]
     if hit.empty:
-        # below lowest threshold -> take last row's points (typically 0 or 4/5 depending your table)
         return float(sub.iloc[-1]["Points"])
     return float(hit.iloc[0]["Points"])
 
 
 def derive_sex_distance(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-
-    # Convertit Sheet en texte sans utiliser le dtype "string"
     sheet = df["Sheet"].fillna("").astype(str)
 
-    df["Sexe"] = np.where(
-        sheet.str.contains("DAMES", case=False, na=False),
-        "F",
-        "M"
-    )
+    df["Sexe"] = np.where(sheet.str.contains("DAMES", case=False, na=False), "F", "M")
 
-    # Distance en object (pas np.nan float)
     df["Distance"] = None
     df.loc[sheet.str.contains("10m", case=False, na=False), "Distance"] = "10m"
     df.loc[sheet.str.contains("50m", case=False, na=False), "Distance"] = "50m"
-
     return df
 
+
 def scale_key(distance: str, sexe: str, category: str) -> str:
-    # category in your file seems "J" or "S"
-    # Junior => "Junior", Senior => no "Junior"
     if pd.isna(distance) or pd.isna(sexe):
         return None
     is_junior = (str(category).strip().upper() == "J")
     women = (str(sexe).upper() == "F")
+
     if distance == "50m":
         if is_junior and women: return "50m Junior Women"
         if is_junior and not women: return "50m Junior Men"
         if (not is_junior) and women: return "50m Women"
         return "50m Men"
+
     if distance == "10m":
         if is_junior and women: return "10m Junior Women"
         if is_junior and not women: return "10m Junior Men"
         if (not is_junior) and women: return "10m Women"
         return "10m Men"
+
     return None
 
 
@@ -292,7 +282,6 @@ def scale_key(distance: str, sexe: str, category: str) -> str:
 # 6) Final points mapping (Rank -> FinalPoints)
 # =========================
 def default_final_points():
-    # You can edit this in the app
     return pd.DataFrame({
         "Rank": [1,2,3,4,5,6,7,8],
         "FinalPoints": [15,14,13,9,8,7,6,5]
@@ -300,15 +289,16 @@ def default_final_points():
 
 
 # =========================
-# 7) Time coefficient (same shape as R)
+# 7) Time coefficient
 # =========================
 def add_date_coeff(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.date
     today = dt.date.today()
 
-    diff_months = df["Date"].apply(lambda d: np.nan if pd.isna(d) else (today.year - d.year) * 12 + (today.month - d.month))
-    # approximate months diff like R interval/months
+    diff_months = df["Date"].apply(
+        lambda d: np.nan if pd.isna(d) else (today.year - d.year) * 12 + (today.month - d.month)
+    )
     k = 3.0
 
     def f(m):
@@ -322,7 +312,7 @@ def add_date_coeff(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # =========================
-# 8) Final table (Athlete, Distance) like your R summarise
+# 8) Final table
 # =========================
 def make_final_table(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -388,14 +378,12 @@ def make_final_table(df: pd.DataFrame) -> pd.DataFrame:
             "Category": g["Category"].dropna().iloc[0] if g["Category"].notna().any() else np.nan,
         }
 
-        # rules: min comps
         if n12 < 4:
-            for k in ["%J_Temps","%S_Temps","%J","%S","AV","HP"]:
-                row[k] = 0
+            for kcol in ["%J_Temps","%S_Temps","%J","%S","AV","HP"]:
+                row[kcol] = 0
         if n12 < 5:
             row["average_without_worst_two"] = 0
 
-        # rule seniors: %J and %J_Temps NA if Category == "S"
         if str(row["Category"]).strip().upper() == "S":
             row["%J"] = np.nan
             row["%J_Temps"] = np.nan
@@ -412,18 +400,19 @@ st.set_page_config(page_title="Ranking App", layout="wide")
 st.title("📊 Ranking App (Excel → paramètres → tableau final)")
 
 colA, colB = st.columns(2)
-
 with colA:
     data_file = st.file_uploader("📥 Fichier résultats", type=["xlsx"], accept_multiple_files=False)
-
 with colB:
     scale_file = st.file_uploader("📥 Point scale", type=["xlsx"], accept_multiple_files=False)
 
 st.divider()
 
-# Final points: upload optional (csv/xlsx) or editable table
 st.subheader("Points de finale (Rank → Points)")
-fp_upload = st.file_uploader("Optionnel: importer une table points finale (csv/xlsx)", type=["csv","xlsx"], accept_multiple_files=False)
+fp_upload = st.file_uploader(
+    "Optionnel: importer une table points finale (csv/xlsx)",
+    type=["csv","xlsx"],
+    accept_multiple_files=False
+)
 
 if fp_upload is None:
     final_points_df = default_final_points()
@@ -439,7 +428,6 @@ final_points_df = st.data_editor(final_points_df, num_rows="dynamic", use_contai
 st.divider()
 
 st.subheader("Coeff compétitions (match → coeff)")
-
 def default_coeff_table():
     return pd.DataFrame({
         "MATCH": ["EN", "LOC", "GP", "INT", "CDF", "JECH", "ECH", "JWCH", "WCH", "JWC", "WC", "WCF"],
@@ -460,23 +448,24 @@ else:
 
 coeff_df = st.data_editor(coeff_df, num_rows="dynamic", use_container_width=True)
 
-# Scale: either parse from uploaded excel or provide editable default skeleton
 st.subheader("Barème (Point scale)")
 if scale_file is not None:
     scale_df = parse_scale_from_excel(scale_file.getvalue())
     if scale_df.empty:
         st.warning("Je n’ai pas trouvé les blocs (ex: '50m Women', '10m Junior Men', etc.).")
 else:
-    # empty template user can paste
     scale_df = pd.DataFrame({"ScaleKey": [], "MinScore": [], "Points": []})
 
 scale_df = st.data_editor(scale_df, num_rows="dynamic", use_container_width=True)
 
 st.divider()
 
-# Athletes to remove
 st.subheader("Athlètes à exclure")
-remove_text = st.text_area("1 nom par ligne", value="BAILLY Nathan\nFORET Alexandre\nGERMOND Etienne\nMOMBERT Claire", height=110)
+remove_text = st.text_area(
+    "1 nom par ligne",
+    value="BAILLY Nathan\nFORET Alexandre\nGERMOND Etienne\nMOMBERT Claire",
+    height=110
+)
 athletes_to_remove = [x.strip() for x in remove_text.splitlines() if x.strip()]
 
 run = st.button("Calculer le tableau final", type="primary")
@@ -490,25 +479,26 @@ if run:
         st.error("Il me faut un barème (point scale). Upload le fichier barème ou remplis la table dans l’app.")
         st.stop()
 
-    # Validate scale columns
     needed = {"ScaleKey","MinScore","Points"}
     if not needed.issubset(scale_df.columns):
         st.error("Le barème doit contenir les colonnes: ScaleKey, MinScore, Points")
         st.stop()
 
-    # Make sure numeric
+    # --------- Clean scale + DOUBLE POINTS (Perf 35->70 etc.) ----------
     scale_df = scale_df.copy()
     scale_df["MinScore"] = pd.to_numeric(scale_df["MinScore"], errors="coerce")
     scale_df["Points"] = pd.to_numeric(scale_df["Points"], errors="coerce")
     scale_df = scale_df.dropna(subset=["ScaleKey","MinScore","Points"])
     scale_df = scale_df.sort_values(["ScaleKey","MinScore"], ascending=[True, False]).reset_index(drop=True)
+    scale_df["Points"] = scale_df["Points"] * POINTS_FACTOR  # permanent x2
 
-    # final points numeric
+    # --------- Final points map + DOUBLE (15->30 etc.) ----------
     fp = final_points_df.copy()
     fp["Rank"] = pd.to_numeric(fp["Rank"], errors="coerce")
     fp["FinalPoints"] = pd.to_numeric(fp["FinalPoints"], errors="coerce")
     fp = fp.dropna(subset=["Rank","FinalPoints"])
     fp_map = dict(zip(fp["Rank"].astype(int), fp["FinalPoints"].astype(float)))
+    fp_map = {k: v * POINTS_FACTOR for k, v in fp_map.items()}  # permanent x2
 
     # Extract data
     df = extract_workbook(data_file.getvalue())
@@ -529,23 +519,19 @@ if run:
     # Date coeff
     df = add_date_coeff(df)
 
-    # Perf via scale table:
-    # We compute Perf_S and Perf_J based on Category (J/S) using the right ScaleKey
-    # In practice: for each row, choose key from (Distance, Sexe, Category)
+    # Scale keys
     df["ScaleKey"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], r["Category"]), axis=1)
 
-    # Apply points (Perf) from scale
+    # Perf via scale
     df["Perf"] = df.apply(lambda r: score_to_points(r["Score"], scale_df, r["ScaleKey"]), axis=1)
 
-    # To keep your same columns (%J and %S), we mirror:
-    # Perf_S = senior perf table, Perf_J = junior perf table
-    # Here we can compute both by forcing Category in key.
+    # Mirror senior/junior perf (both computed from the doubled scale_df)
     df["ScaleKey_S"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], "S"), axis=1)
     df["ScaleKey_J"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], "J"), axis=1)
     df["Perf_S"] = df.apply(lambda r: score_to_points(r["Score"], scale_df, r["ScaleKey_S"]), axis=1)
     df["Perf_J"] = df.apply(lambda r: score_to_points(r["Score"], scale_df, r["ScaleKey_J"]), axis=1)
 
-    # Final score from rank mapping
+    # Final score from rank mapping (already doubled)
     def rank_to_finalpts(x):
         if pd.isna(x):
             return np.nan
@@ -558,8 +544,11 @@ if run:
 
     df["Total_Score_J"] = df["Perf_J"] + np.where(df["Finale_score"].isna(), 0, df["Finale_score"])
     df["Total_Score_S"] = df["Perf_S"] + np.where(df["Finale_score"].isna(), 0, df["Finale_score"])
-    df["%J"] = (df["Total_Score_J"] / 50.0) * 100.0
-    df["%S"] = (df["Total_Score_S"] / 50.0) * 100.0
+
+    # ✅ denom becomes 100 instead of 50 (because everything doubled)
+    DENOM = 50.0 * POINTS_FACTOR  # = 100
+    df["%J"] = (df["Total_Score_J"] / DENOM) * 100.0
+    df["%S"] = (df["Total_Score_S"] / DENOM) * 100.0
 
     # Filter distance known
     df = df[df["Distance"].notna()].copy()
@@ -580,11 +569,16 @@ if run:
 
     with c1:
         csv_bytes = final_tbl.to_csv(index=False).encode("utf-8")
-        st.download_button("Télécharger tableau_final.csv", data=csv_bytes, file_name="tableau_final.csv", mime="text/csv")
+        st.download_button(
+            "Télécharger tableau_final.csv",
+            data=csv_bytes,
+            file_name="tableau_final.csv",
+            mime="text/csv"
+        )
 
     with c2:
         out = io.BytesIO()
-        with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        with pd.ExcelWriter(out, engine=EXCEL_ENGINE) as writer:
             final_tbl.to_excel(writer, index=False, sheet_name="Final")
             df.to_excel(writer, index=False, sheet_name="Clean_Long")
             scale_df.to_excel(writer, index=False, sheet_name="Scale")
@@ -595,14 +589,3 @@ if run:
             file_name="tableau_final.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-
-
-
-        
-
-
-
-
-
-
-
