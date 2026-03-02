@@ -284,7 +284,7 @@ def scale_key(distance: str, sexe: str, category: str) -> str:
 def default_final_points():
     return pd.DataFrame({
         "Rank": [1,2,3,4,5,6,7,8],
-        "FinalPoints": [15,14,13,9,8,7,6,5]
+        "FinalPoints": [30,28,26,18,16,14,12,10]
     })
 
 
@@ -589,3 +589,4 @@ if run:
             file_name="tableau_final.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
