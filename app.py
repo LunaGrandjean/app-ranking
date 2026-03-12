@@ -562,18 +562,6 @@ if run:
     df["ScaleKey_S"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], "S"), axis=1)
     df["ScaleKey_J"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], "J"), axis=1)
     df["Perf_S"] = df.apply(lambda r: score_to_points(r["Score"], scale_df, r["ScaleKey_S"]), axis=1)
-    st.write("DEBUG 50m Men <= 580")
-    st.write(
-        df.loc[
-            (df["ScaleKey_S"] == "50m Men") & (df["Score"] <= 580),
-            ["Athlete", "Score", "ScaleKey_S", "Perf_S"]
-        ].sort_values("Score")
-    )
-    st.write("TEST DIRECT")
-    st.write("573 ->", score_to_points(573, scale_df, "50m Men"))
-    st.write("579 ->", score_to_points(579, scale_df, "50m Men"))
-    st.write("580 ->", score_to_points(580, scale_df, "50m Men"))
-    st.write("580.1 ->", score_to_points(580.1, scale_df, "50m Men"))
     df["Perf_J"] = df.apply(lambda r: score_to_points(r["Score"], scale_df, r["ScaleKey_J"]), axis=1)
 
     def rank_to_finalpts(x):
@@ -603,61 +591,63 @@ if run:
     with tab2:
         st.dataframe(final_tbl, use_container_width=True, height=520)
 
-    st.subheader("Exports")
-    c1, c2 = st.columns(2)
+        st.subheader("Exports")
+        c1, c2 = st.columns(2)
 
-    with c1:
-        csv_bytes = final_tbl.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "Télécharger tableau_final.csv",
-            data=csv_bytes,
-            file_name="tableau_final.csv",
-            mime="text/csv"
-        )
+        with c1:
+            csv_bytes = final_tbl.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Télécharger tableau_final.csv",
+                data=csv_bytes,
+                file_name="tableau_final.csv",
+                mime="text/csv"
+            )
 
-    with c2:
-        out = io.BytesIO()
-        with pd.ExcelWriter(out, engine="openpyxl") as writer:
-            final_tbl.to_excel(writer, index=False, sheet_name="Final")
-            df.to_excel(writer, index=False, sheet_name="Clean_Long")
-            scale_df.to_excel(writer, index=False, sheet_name="Scale")
-            fp.to_excel(writer, index=False, sheet_name="FinalPoints")
+        with c2:
+            out = io.BytesIO()
+            with pd.ExcelWriter(out, engine="openpyxl") as writer:
+                final_tbl.to_excel(writer, index=False, sheet_name="Final")
+                df.to_excel(writer, index=False, sheet_name="Clean_Long")
+                scale_df.to_excel(writer, index=False, sheet_name="Scale")
+                fp.to_excel(writer, index=False, sheet_name="FinalPoints")
 
-            ws = writer.book["Final"]
+                ws = writer.book["Final"]
 
-            ## couleurs
-            red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
-            orange_fill = PatternFill(start_color="FFD580", end_color="FFD580", fill_type="solid")
-            green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+                red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+                orange_fill = PatternFill(start_color="FFD580", end_color="FFD580", fill_type="solid")
+                green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
 
-            headers = [cell.value for cell in ws[1]]
+                headers = [cell.value for cell in ws[1]]
 
-            cols_target = []
-            for name in ["%S compet", "%J compet"]:
-                if name in headers:
-                    cols_target.append(headers.index(name) + 1)
+                cols_target = []
+                for name in ["%S compet", "%J compet"]:
+                    if name in headers:
+                        cols_target.append(headers.index(name) + 1)
 
-            max_row = ws.max_row
+                max_row = ws.max_row
 
-            for col in cols_target:
+                for col in cols_target:
+                    col_letter = ws.cell(row=1, column=col).column_letter
+                    cell_range = f"{col_letter}2:{col_letter}{max_row}"
 
-                col_letter = ws.cell(row=1, column=col).column_letter
-                cell_range = f"{col_letter}2:{col_letter}{max_row}"
+                    ws.conditional_formatting.add(
+                        cell_range,
+                        CellIsRule(operator='lessThan', formula=['30'], fill=red_fill)
+                    )
+                    ws.conditional_formatting.add(
+                        cell_range,
+                        CellIsRule(operator='between', formula=['30', '70'], fill=orange_fill)
+                    )
+                    ws.conditional_formatting.add(
+                        cell_range,
+                        CellIsRule(operator='greaterThan', formula=['70'], fill=green_fill)
+                    )
 
-                # rouge < 30
-                ws.conditional_formatting.add(
-                    cell_range,
-                    CellIsRule(operator='lessThan', formula=['30'], fill=red_fill)
-                )
+            out.seek(0)
 
-                # orange 30 -> 70
-                ws.conditional_formatting.add(
-                    cell_range,
-                    CellIsRule(operator='between', formula=['30', '70'], fill=orange_fill)
-                )
-
-                # vert > 70
-                ws.conditional_formatting.add(
-                    cell_range,
-                    CellIsRule(operator='greaterThan', formula=['70'], fill=green_fill)
-                )
+            st.download_button(
+                "Télécharger tableau_final.xlsx",
+                data=out.getvalue(),
+                file_name="tableau_final.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
