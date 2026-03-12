@@ -4,11 +4,14 @@ import datetime as dt
 import numpy as np
 import pandas as pd
 import streamlit as st
+from openpyxl.styles import PatternFill
+from openpyxl.formatting.rule import CellIsRule
 
 EXCEL_ENGINE = "openpyxl"
 
 # Permanent scale: 50 -> 100 (double everything)
 POINTS_FACTOR = 2.0  # Perf: 35->70, Final: 15->30, Total: 50->100
+
 
 # =========================
 # Utils: date conversion
@@ -25,10 +28,8 @@ def excel_date_to_date(x):
     if not s:
         return pd.NaT
 
-    # essaie d'abord ISO (silence le warning)
     dtv = pd.to_datetime(s, errors="coerce", format="%Y-%m-%d %H:%M:%S")
     if pd.isna(dtv):
-        # fallback dayfirst
         dtv = pd.to_datetime(s, errors="coerce", dayfirst=True)
 
     return dtv.date() if not pd.isna(dtv) else pd.NaT
@@ -46,9 +47,8 @@ def squish(x) -> str:
 def extract_sheet_long(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
     raw = raw.copy()
 
-    # --- 1) Trouver la ligne header ("Cat" + "Name") ---
     header_row = None
-    for r in range(min(40, raw.shape[0])):  # on cherche dans le haut du fichier
+    for r in range(min(40, raw.shape[0])):
         c0 = squish(raw.iat[r, 0]).lower()
         c1 = squish(raw.iat[r, 1]).lower()
         if c0 == "cat" and c1 == "name":
@@ -56,24 +56,22 @@ def extract_sheet_long(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
             break
 
     if header_row is None:
-        return pd.DataFrame(columns=["Athlete","Category","Competition","Date","Score","Rank","Sheet"])
+        return pd.DataFrame(columns=["Athlete", "Category", "Competition", "Date", "Score", "Rank", "Sheet"])
 
     athlete_start_row = header_row + 1
-    comp_row = max(0, header_row - 2)  # souvent la ligne des compétitions est 2 lignes au-dessus
+    comp_row = max(0, header_row - 2)
 
-    # --- 2) Colonnes "Score" sur la ligne header ---
     score_cols = []
     for c in range(raw.shape[1]):
         if squish(raw.iat[header_row, c]).lower() == "score":
             score_cols.append(c)
 
     if not score_cols:
-        return pd.DataFrame(columns=["Athlete","Category","Competition","Date","Score","Rank","Sheet"])
+        return pd.DataFrame(columns=["Athlete", "Category", "Competition", "Date", "Score", "Rank", "Sheet"])
 
     first_comp_col = score_cols[0]
     step = (score_cols[1] - score_cols[0]) if len(score_cols) >= 2 else 3
 
-    # --- Athlètes / Catégories ---
     athletes = raw.iloc[athlete_start_row:, 1].apply(squish).replace({"": np.nan})
     categories = raw.iloc[athlete_start_row:, 0].apply(squish).replace({"": np.nan})
 
@@ -99,27 +97,23 @@ def extract_sheet_long(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
             "Sheet": sheet_name
         })
 
-        # comme R: si score ET rank NA => on enlève
         df = df[df["Athlete"].notna()]
         df = df[~(df["Score"].isna() & df["Rank"].isna())]
 
         parts.append(df)
 
     if not parts:
-        return pd.DataFrame(columns=["Athlete","Category","Competition","Date","Score","Rank","Sheet"])
+        return pd.DataFrame(columns=["Athlete", "Category", "Competition", "Date", "Score", "Rank", "Sheet"])
 
-    out = pd.concat(parts, ignore_index=True)
-    return out
+    return pd.concat(parts, ignore_index=True)
 
 
 def extract_workbook(file_bytes: bytes) -> pd.DataFrame:
-    # ExcelFile + engine forcé
     xf = pd.ExcelFile(io.BytesIO(file_bytes), engine=EXCEL_ENGINE)
 
     dfs = []
     for sheet in xf.sheet_names:
         try:
-            # IMPORTANT: recréer BytesIO à chaque read_excel (évite les soucis de curseur)
             raw = pd.read_excel(
                 io.BytesIO(file_bytes),
                 sheet_name=sheet,
@@ -132,12 +126,12 @@ def extract_workbook(file_bytes: bytes) -> pd.DataFrame:
             pass
 
     if not dfs:
-        return pd.DataFrame(columns=["Athlete","Category","Competition","Date","Score","Rank","Sheet"])
+        return pd.DataFrame(columns=["Athlete", "Category", "Competition", "Date", "Score", "Rank", "Sheet"])
     return pd.concat(dfs, ignore_index=True)
 
 
 # =========================
-# 2) Competition coefficient (as in R)
+# 2) Competition coefficient
 # =========================
 def add_comp_coeff(df: pd.DataFrame, coeff_table: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -186,7 +180,7 @@ def fix_names(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # =========================
-# 4) Parse "point scale" table
+# 4) Parse point scale
 # =========================
 def parse_scale_from_excel(file_bytes: bytes, sheet_name: str = None) -> pd.DataFrame:
     bio = io.BytesIO(file_bytes)
@@ -195,8 +189,8 @@ def parse_scale_from_excel(file_bytes: bytes, sheet_name: str = None) -> pd.Data
     raw = pd.read_excel(bio, sheet_name=use_sheet, header=None, engine=EXCEL_ENGINE)
 
     wanted = {
-        "50m Women","50m Men","50m Junior Women","50m Junior Men",
-        "10m Women","10m Men","10m Junior Women","10m Junior Men"
+        "50m Women", "50m Men", "50m Junior Women", "50m Junior Men",
+        "10m Women", "10m Men", "10m Junior Women", "10m Junior Men"
     }
 
     headers = {}
@@ -226,22 +220,28 @@ def parse_scale_from_excel(file_bytes: bytes, sheet_name: str = None) -> pd.Data
     if scale.empty:
         return scale
 
-    scale = scale.sort_values(["ScaleKey","MinScore"], ascending=[True, False]).reset_index(drop=True)
-    return scale
+    return scale.sort_values(["ScaleKey", "MinScore"], ascending=[True, False]).reset_index(drop=True)
 
 
 # =========================
-# 5) Apply scale: score -> points
+# 5) Apply scale
 # =========================
 def score_to_points(score: float, scale_df: pd.DataFrame, key: str) -> float:
     if pd.isna(score):
         return np.nan
-    sub = scale_df[scale_df["ScaleKey"] == key]
+
+    sub = scale_df[scale_df["ScaleKey"] == key].sort_values("MinScore", ascending=False)
     if sub.empty:
         return np.nan
-    hit = sub[sub["MinScore"] <= score]
+
+    # équivalent à Score > seuil
+    hit = sub[sub["MinScore"] < score]
+
     if hit.empty:
+        # si aucun seuil strictement inférieur n'est matché,
+        # on prend la dernière ligne (normalement le 0)
         return float(sub.iloc[-1]["Points"])
+
     return float(hit.iloc[0]["Points"])
 
 
@@ -264,27 +264,33 @@ def scale_key(distance: str, sexe: str, category: str) -> str:
     women = (str(sexe).upper() == "F")
 
     if distance == "50m":
-        if is_junior and women: return "50m Junior Women"
-        if is_junior and not women: return "50m Junior Men"
-        if (not is_junior) and women: return "50m Women"
+        if is_junior and women:
+            return "50m Junior Women"
+        if is_junior and not women:
+            return "50m Junior Men"
+        if (not is_junior) and women:
+            return "50m Women"
         return "50m Men"
 
     if distance == "10m":
-        if is_junior and women: return "10m Junior Women"
-        if is_junior and not women: return "10m Junior Men"
-        if (not is_junior) and women: return "10m Women"
+        if is_junior and women:
+            return "10m Junior Women"
+        if is_junior and not women:
+            return "10m Junior Men"
+        if (not is_junior) and women:
+            return "10m Women"
         return "10m Men"
 
     return None
 
 
 # =========================
-# 6) Final points mapping (Rank -> FinalPoints)
+# 6) Final points mapping
 # =========================
 def default_final_points():
     return pd.DataFrame({
-        "Rank": [1,2,3,4,5,6,7,8],
-        "FinalPoints": [30,28,26,18,16,14,12,10]
+        "Rank": [1, 2, 3, 4, 5, 6, 7, 8],
+        "FinalPoints": [30, 28, 26, 18, 16, 14, 12, 10]
     })
 
 
@@ -302,9 +308,12 @@ def add_date_coeff(df: pd.DataFrame) -> pd.DataFrame:
     k = 3.0
 
     def f(m):
-        if pd.isna(m): return np.nan
-        if m <= 4: return 1.0
-        if m >= 12: return 0.0
+        if pd.isna(m):
+            return np.nan
+        if m <= 4:
+            return 1.0
+        if m >= 12:
+            return 0.0
         return (1 - np.exp(-k * (12 - m) / (12 - 4))) / (1 - np.exp(-k))
 
     df["date_coeff"] = diff_months.apply(f)
@@ -323,12 +332,6 @@ def make_final_table(df: pd.DataFrame) -> pd.DataFrame:
         if pd.isna(date_ref):
             return 0
         return int(((~g["Score"].isna()) & (g["Date"] >= (date_ref - dt.timedelta(days=365)))).sum())
-
-    def avg_without_worst_two(g):
-        s = g["Score"].dropna().sort_values()
-        if len(s) <= 2:
-            return np.nan
-        return float(s.iloc[2:].mean())
 
     def av_12m(g):
         if pd.isna(date_ref):
@@ -354,43 +357,65 @@ def make_final_table(df: pd.DataFrame) -> pd.DataFrame:
         return float((vals[mask] * w[mask]).sum() / denom)
 
     rows = []
-    for (ath, dist), g in df.groupby(["Athlete","Distance"], dropna=False):
+    for (ath, dist), g in df.groupby(["Athlete", "Distance"], dropna=False):
         g = g.copy()
         n12 = n_comp_12m(g)
 
         pctJ_t = weighted_mean(g["%J"], g["Coeff"] * g["date_coeff"])
         pctS_t = weighted_mean(g["%S"], g["Coeff"] * g["date_coeff"])
-        pctJ   = weighted_mean(g["%J"], g["Coeff"])
-        pctS   = weighted_mean(g["%S"], g["Coeff"])
+        pctJ = weighted_mean(g["%J"], g["Coeff"])
+        pctS = weighted_mean(g["%S"], g["Coeff"])
+
+        finale_avg = g["Finale_score"].dropna().mean() if g["Finale_score"].notna().any() else np.nan
 
         row = {
             "Athlete": ath,
             "Distance": dist,
-            "n_compet_12m": n12,
-            "average_without_worst_two": avg_without_worst_two(g),
-            "AV": av_12m(g),
-            "HP": hp_12m(g),
-            "%J_Temps": pctJ_t,
-            "%S_Temps": pctS_t,
             "%J": pctJ,
+            "%J compet": pctJ_t,
+            "Finale J": finale_avg,
             "%S": pctS,
+            "%S compet": pctS_t,
+            "Finale S": finale_avg,
+            "Moyenne": av_12m(g),
+            "HP": hp_12m(g),
+            "Nombre de compet": n12,
             "Sexe": g["Sexe"].dropna().iloc[0] if g["Sexe"].notna().any() else np.nan,
-            "Category": g["Category"].dropna().iloc[0] if g["Category"].notna().any() else np.nan,
+            "Catégorie": g["Category"].dropna().iloc[0] if g["Category"].notna().any() else np.nan,
         }
 
-        if n12 < 4:
-            for kcol in ["%J_Temps","%S_Temps","%J","%S","AV","HP"]:
-                row[kcol] = 0
+        # moins de 5 compet: mettre à 0 uniquement les %
         if n12 < 5:
-            row["average_without_worst_two"] = 0
+            for kcol in ["%J", "%J compet", "%S", "%S compet"]:
+                row[kcol] = 0
 
-        if str(row["Category"]).strip().upper() == "S":
+        # seniors: pas de colonnes junior
+        if str(row["Catégorie"]).strip().upper() == "S":
             row["%J"] = np.nan
-            row["%J_Temps"] = np.nan
+            row["%J compet"] = np.nan
+            row["Finale J"] = np.nan
 
         rows.append(row)
 
-    return pd.DataFrame(rows)
+    final_tbl = pd.DataFrame(rows)
+
+    ordered_cols = [
+        "Athlete",
+        "Distance",
+        "%J",
+        "%J compet",
+        "Finale J",
+        "%S",
+        "%S compet",
+        "Finale S",
+        "Moyenne",
+        "HP",
+        "Nombre de compet",
+        "Sexe",
+        "Catégorie"
+    ]
+
+    return final_tbl[ordered_cols]
 
 
 # =========================
@@ -410,7 +435,7 @@ st.divider()
 st.subheader("Points de finale (Rank → Points)")
 fp_upload = st.file_uploader(
     "Optionnel: importer une table points finale (csv/xlsx)",
-    type=["csv","xlsx"],
+    type=["csv", "xlsx"],
     accept_multiple_files=False
 )
 
@@ -428,10 +453,11 @@ final_points_df = st.data_editor(final_points_df, num_rows="dynamic", use_contai
 st.divider()
 
 st.subheader("Coeff compétitions (match → coeff)")
+
 def default_coeff_table():
     return pd.DataFrame({
         "MATCH": ["EN", "LOC", "GP", "INT", "CDF", "JECH", "ECH", "JWCH", "WCH", "JWC", "WC", "WCF"],
-        "COEFF": [2,   0.5,   3,    2,     1,     3,     3,     5,     5,    4,   4,   5]
+        "COEFF": [2, 0.5, 3, 2, 1, 3, 3, 5, 5, 4, 4, 5]
     })
 
 coeff_upload = st.file_uploader(
@@ -479,59 +505,54 @@ if run:
         st.error("Il me faut un barème (point scale). Upload le fichier barème ou remplis la table dans l’app.")
         st.stop()
 
-    needed = {"ScaleKey","MinScore","Points"}
+    needed = {"ScaleKey", "MinScore", "Points"}
     if not needed.issubset(scale_df.columns):
         st.error("Le barème doit contenir les colonnes: ScaleKey, MinScore, Points")
         st.stop()
 
-    # --------- Clean scale + DOUBLE POINTS (Perf 35->70 etc.) ----------
+    # Clean scale + double perf points
     scale_df = scale_df.copy()
     scale_df["MinScore"] = pd.to_numeric(scale_df["MinScore"], errors="coerce")
     scale_df["Points"] = pd.to_numeric(scale_df["Points"], errors="coerce")
-    scale_df = scale_df.dropna(subset=["ScaleKey","MinScore","Points"])
-    scale_df = scale_df.sort_values(["ScaleKey","MinScore"], ascending=[True, False]).reset_index(drop=True)
-    scale_df["Points"] = scale_df["Points"] * POINTS_FACTOR  # permanent x2
+    scale_df = scale_df.dropna(subset=["ScaleKey", "MinScore", "Points"])
+    scale_df = scale_df.sort_values(["ScaleKey", "MinScore"], ascending=[True, False]).reset_index(drop=True)
+    scale_df["Points"] = scale_df["Points"] * POINTS_FACTOR
 
-    # --------- Final points map + DOUBLE (15->30 etc.) ----------
+    # Final points map
     fp = final_points_df.copy()
     fp["Rank"] = pd.to_numeric(fp["Rank"], errors="coerce")
     fp["FinalPoints"] = pd.to_numeric(fp["FinalPoints"], errors="coerce")
-    fp = fp.dropna(subset=["Rank","FinalPoints"])
+    fp = fp.dropna(subset=["Rank", "FinalPoints"])
+
+    # ✅ PAS de x2 ici car les valeurs par défaut sont déjà doublées
     fp_map = dict(zip(fp["Rank"].astype(int), fp["FinalPoints"].astype(float)))
-    fp_map = {k: v * POINTS_FACTOR for k, v in fp_map.items()}  # permanent x2
 
     # Extract data
     df = extract_workbook(data_file.getvalue())
 
-    # Clean like your script
+    # Clean
     df = df[df["Score"].fillna(0) > 0].copy()
     df = df[df["Score"].notna()].copy()
 
-    # Add Sexe/Distance + comp coeff + names
+    # Add fields
     df = derive_sex_distance(df)
     df = add_comp_coeff(df, coeff_df)
     df = fix_names(df)
 
-    # Remove athletes
     if athletes_to_remove:
         df = df[~df["Athlete"].isin(athletes_to_remove)].copy()
 
-    # Date coeff
     df = add_date_coeff(df)
 
-    # Scale keys
     df["ScaleKey"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], r["Category"]), axis=1)
 
-    # Perf via scale
     df["Perf"] = df.apply(lambda r: score_to_points(r["Score"], scale_df, r["ScaleKey"]), axis=1)
 
-    # Mirror senior/junior perf (both computed from the doubled scale_df)
     df["ScaleKey_S"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], "S"), axis=1)
     df["ScaleKey_J"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], "J"), axis=1)
     df["Perf_S"] = df.apply(lambda r: score_to_points(r["Score"], scale_df, r["ScaleKey_S"]), axis=1)
     df["Perf_J"] = df.apply(lambda r: score_to_points(r["Score"], scale_df, r["ScaleKey_J"]), axis=1)
 
-    # Final score from rank mapping (already doubled)
     def rank_to_finalpts(x):
         if pd.isna(x):
             return np.nan
@@ -545,25 +566,20 @@ if run:
     df["Total_Score_J"] = df["Perf_J"] + np.where(df["Finale_score"].isna(), 0, df["Finale_score"])
     df["Total_Score_S"] = df["Perf_S"] + np.where(df["Finale_score"].isna(), 0, df["Finale_score"])
 
-    # ✅ denom becomes 100 instead of 50 (because everything doubled)
     DENOM = 50.0 * POINTS_FACTOR  # = 100
     df["%J"] = (df["Total_Score_J"] / DENOM) * 100.0
     df["%S"] = (df["Total_Score_S"] / DENOM) * 100.0
 
-    # Filter distance known
     df = df[df["Distance"].notna()].copy()
 
-    # Final table
     final_tbl = make_final_table(df)
 
-    # Display
     tab1, tab2 = st.tabs(["Données clean (long)", "Tableau final"])
     with tab1:
         st.dataframe(df, use_container_width=True, height=520)
     with tab2:
         st.dataframe(final_tbl, use_container_width=True, height=520)
 
-    # Export
     st.subheader("Exports")
     c1, c2 = st.columns(2)
 
@@ -578,15 +594,47 @@ if run:
 
     with c2:
         out = io.BytesIO()
-        with pd.ExcelWriter(out, engine=EXCEL_ENGINE) as writer:
+        with pd.ExcelWriter(out, engine="openpyxl") as writer:
             final_tbl.to_excel(writer, index=False, sheet_name="Final")
             df.to_excel(writer, index=False, sheet_name="Clean_Long")
             scale_df.to_excel(writer, index=False, sheet_name="Scale")
             fp.to_excel(writer, index=False, sheet_name="FinalPoints")
-        st.download_button(
-            "Télécharger tableau_final.xlsx",
-            data=out.getvalue(),
-            file_name="tableau_final.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
 
+            ws = writer.book["Final"]
+
+            # couleurs
+            red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+            orange_fill = PatternFill(start_color="FFD580", end_color="FFD580", fill_type="solid")
+            green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+
+            # trouver les colonnes à colorer
+            headers = [cell.value for cell in ws[1]]
+
+            cols_target = []
+            for name in ["%S compet", "%J compet"]:
+                if name in headers:
+                    cols_target.append(headers.index(name) + 1)
+
+            max_row = ws.max_row
+
+            for col in cols_target:
+
+                col_letter = ws.cell(row=1, column=col).column_letter
+
+                # rouge < 30
+                ws.conditional_formatting.add(
+                    f"{col_letter}2:{col_letter}{max_row}",
+                    CellIsRule(operator='lessThan', formula=['30'], fill=red_fill)
+                )
+
+                # orange >= 30
+                ws.conditional_formatting.add(
+                    f"{col_letter}2:{col_letter}{max_row}",
+                    CellIsRule(operator='greaterThanOrEqual', formula=['30'], fill=orange_fill)
+                )
+
+                # vert > 70
+                ws.conditional_formatting.add(
+                    f"{col_letter}2:{col_letter}{max_row}",
+                    CellIsRule(operator='greaterThan', formula=['70'], fill=green_fill)
+                )
