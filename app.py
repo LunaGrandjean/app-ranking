@@ -527,7 +527,7 @@ if run:
     scale_df["Points"] = pd.to_numeric(scale_df["Points"], errors="coerce")
     scale_df = scale_df.dropna(subset=["ScaleKey", "MinScore", "Points"])
     scale_df = scale_df.sort_values(["ScaleKey", "MinScore"], ascending=[True, False]).reset_index(drop=True)
-    scale_df["Points"] = scale_df["Points"] * POINTS_FACTOR
+    # scale_df["Points"] = scale_df["Points"] * POINTS_FACTOR
 
     # Final points map
     fp = final_points_df.copy()
@@ -651,3 +651,4 @@ if run:
                 file_name="tableau_final.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
+
