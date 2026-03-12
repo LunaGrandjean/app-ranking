@@ -230,19 +230,30 @@ def score_to_points(score: float, scale_df: pd.DataFrame, key: str) -> float:
     if pd.isna(score):
         return np.nan
 
-    sub = scale_df[scale_df["ScaleKey"] == key].sort_values("MinScore", ascending=False)
+    sub = scale_df[scale_df["ScaleKey"] == key].copy()
     if sub.empty:
         return np.nan
 
-    # équivalent à Score > seuil
-    hit = sub[sub["MinScore"] < score]
+    sub["MinScore"] = pd.to_numeric(sub["MinScore"], errors="coerce")
+    sub["Points"] = pd.to_numeric(sub["Points"], errors="coerce")
+    sub = sub.dropna(subset=["MinScore", "Points"]).sort_values("MinScore", ascending=False)
 
-    if hit.empty:
-        # si aucun seuil strictement inférieur n'est matché,
-        # on prend la dernière ligne (normalement le 0)
-        return float(sub.iloc[-1]["Points"])
+    if sub.empty:
+        return np.nan
 
-    return float(hit.iloc[0]["Points"])
+    # plus petit seuil du barème
+    min_threshold = sub["MinScore"].min()
+
+    # si score <= plus petit seuil, on met 0
+    if score <= min_threshold:
+        return 0.0
+
+    # équivalent R : Score > seuil
+    for _, row in sub.iterrows():
+        if score > row["MinScore"]:
+            return float(row["Points"])
+
+    return 0.0
 
 
 def derive_sex_distance(df: pd.DataFrame) -> pd.DataFrame:
@@ -524,7 +535,7 @@ if run:
     fp["FinalPoints"] = pd.to_numeric(fp["FinalPoints"], errors="coerce")
     fp = fp.dropna(subset=["Rank", "FinalPoints"])
 
-    # ✅ PAS de x2 ici car les valeurs par défaut sont déjà doublées
+    # PAS de x2 ici car les valeurs par défaut sont déjà doublées
     fp_map = dict(zip(fp["Rank"].astype(int), fp["FinalPoints"].astype(float)))
 
     # Extract data
@@ -551,6 +562,18 @@ if run:
     df["ScaleKey_S"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], "S"), axis=1)
     df["ScaleKey_J"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], "J"), axis=1)
     df["Perf_S"] = df.apply(lambda r: score_to_points(r["Score"], scale_df, r["ScaleKey_S"]), axis=1)
+    st.write("DEBUG 50m Men <= 580")
+    st.write(
+        df.loc[
+            (df["ScaleKey_S"] == "50m Men") & (df["Score"] <= 580),
+            ["Athlete", "Score", "ScaleKey_S", "Perf_S"]
+        ].sort_values("Score")
+    )
+    st.write("TEST DIRECT")
+    st.write("573 ->", score_to_points(573, scale_df, "50m Men"))
+    st.write("579 ->", score_to_points(579, scale_df, "50m Men"))
+    st.write("580 ->", score_to_points(580, scale_df, "50m Men"))
+    st.write("580.1 ->", score_to_points(580.1, scale_df, "50m Men"))
     df["Perf_J"] = df.apply(lambda r: score_to_points(r["Score"], scale_df, r["ScaleKey_J"]), axis=1)
 
     def rank_to_finalpts(x):
@@ -602,12 +625,11 @@ if run:
 
             ws = writer.book["Final"]
 
-            # couleurs
+            ## couleurs
             red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
             orange_fill = PatternFill(start_color="FFD580", end_color="FFD580", fill_type="solid")
             green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
 
-            # trouver les colonnes à colorer
             headers = [cell.value for cell in ws[1]]
 
             cols_target = []
@@ -620,21 +642,22 @@ if run:
             for col in cols_target:
 
                 col_letter = ws.cell(row=1, column=col).column_letter
+                cell_range = f"{col_letter}2:{col_letter}{max_row}"
 
                 # rouge < 30
                 ws.conditional_formatting.add(
-                    f"{col_letter}2:{col_letter}{max_row}",
+                    cell_range,
                     CellIsRule(operator='lessThan', formula=['30'], fill=red_fill)
                 )
 
-                # orange >= 30
+                # orange 30 -> 70
                 ws.conditional_formatting.add(
-                    f"{col_letter}2:{col_letter}{max_row}",
-                    CellIsRule(operator='greaterThanOrEqual', formula=['30'], fill=orange_fill)
+                    cell_range,
+                    CellIsRule(operator='between', formula=['30', '70'], fill=orange_fill)
                 )
 
                 # vert > 70
                 ws.conditional_formatting.add(
-                    f"{col_letter}2:{col_letter}{max_row}",
+                    cell_range,
                     CellIsRule(operator='greaterThan', formula=['70'], fill=green_fill)
                 )
