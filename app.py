@@ -417,6 +417,16 @@ def make_final_table(df: pd.DataFrame) -> pd.DataFrame:
 st.set_page_config(page_title="Ranking App", layout="wide")
 st.title("Ranking App (Excel → paramètres → tableau final)")
 
+# INITIALISATION DU SESSION STATE
+if "final_tbl" not in st.session_state:
+    st.session_state["final_tbl"] = None
+if "df_clean" not in st.session_state:
+    st.session_state["df_clean"] = None
+if "scale_df_used" not in st.session_state:
+    st.session_state["scale_df_used"] = None
+if "fp_df_used" not in st.session_state:
+    st.session_state["fp_df_used"] = None
+
 colA, colB = st.columns(2)
 with colA:
     data_file = st.file_uploader("📥 Fichier résultats", type=["xlsx"], accept_multiple_files=False)
@@ -446,7 +456,7 @@ else:
     else:
         final_points_df = pd.read_excel(fp_upload, engine=EXCEL_ENGINE)
 
-final_points_df = st.data_editor(final_points_df, num_rows="dynamic", use_container_width=True)
+final_points_df = st.data_editor(final_points_df, num_rows="dynamic", key="editor_fp", use_container_width=True)
 
 st.divider()
 
@@ -470,7 +480,7 @@ else:
     ext = coeff_upload.name.split(".")[-1].lower()
     coeff_df = pd.read_csv(coeff_upload) if ext == "csv" else pd.read_excel(coeff_upload, engine=EXCEL_ENGINE)
 
-coeff_df = st.data_editor(coeff_df, num_rows="dynamic", use_container_width=True)
+coeff_df = st.data_editor(coeff_df, num_rows="dynamic", key="editor_coeff", use_container_width=True)
 
 st.subheader("Barème (Point scale)")
 if scale_file is not None:
@@ -480,7 +490,7 @@ if scale_file is not None:
 else:
     scale_df = pd.DataFrame({"ScaleKey": [], "MinScore": [], "Points": []})
 
-scale_df = st.data_editor(scale_df, num_rows="dynamic", use_container_width=True)
+scale_df = st.data_editor(scale_df, num_rows="dynamic", key="editor_scale", use_container_width=True)
 
 st.divider()
 
@@ -494,37 +504,29 @@ athletes_to_remove = [x.strip() for x in remove_text.splitlines() if x.strip()]
 
 run = st.button("Calculer le tableau final", type="primary")
 
+# --- CALCULS ---
 if run:
     if data_file is None:
         st.error("Upload le fichier Excel résultats (FFTir) d’abord.")
         st.stop()
-
     if scale_df.empty:
-        st.error("Il me faut un barème (point scale). Upload le fichier barème ou remplis la table dans l’app.")
+        st.error("Il me faut un barème (point scale).")
         st.stop()
 
-    needed = {"ScaleKey", "MinScore", "Points"}
-    if not needed.issubset(scale_df.columns):
-        st.error("Le barème doit contenir les colonnes: ScaleKey, MinScore, Points")
-        st.stop()
+    # Pre-processing Barème
+    scale_df_c = scale_df.copy()
+    scale_df_c["MinScore"] = pd.to_numeric(scale_df_c["MinScore"], errors="coerce")
+    scale_df_c["Points"] = pd.to_numeric(scale_df_c["Points"], errors="coerce")
+    scale_df_c = scale_df_c.dropna(subset=["ScaleKey", "MinScore", "Points"])
 
-    scale_df = scale_df.copy()
-    scale_df["MinScore"] = pd.to_numeric(scale_df["MinScore"], errors="coerce")
-    scale_df["Points"] = pd.to_numeric(scale_df["Points"], errors="coerce")
-    scale_df = scale_df.dropna(subset=["ScaleKey", "MinScore", "Points"])
-    scale_df = scale_df.sort_values(["ScaleKey", "MinScore"], ascending=[True, False]).reset_index(drop=True)
-
+    # Final points map
     fp = final_points_df.copy()
-    fp["Rank"] = pd.to_numeric(fp["Rank"], errors="coerce")
-    fp["FinalPoints"] = pd.to_numeric(fp["FinalPoints"], errors="coerce")
-    fp = fp.dropna(subset=["Rank", "FinalPoints"])
-    fp_map = dict(zip(fp["Rank"].astype(int), fp["FinalPoints"].astype(float)))
+    fp_map = dict(zip(pd.to_numeric(fp["Rank"]).astype(int), pd.to_numeric(fp["FinalPoints"]).astype(float)))
 
+    # Extraction et nettoyage
     df = extract_workbook(data_file.getvalue())
-
     df = df[df["Score"].fillna(0) > 0].copy()
     df = df[df["Score"].notna()].copy()
-
     df = derive_sex_distance(df)
     df = add_comp_coeff(df, coeff_df)
     df = fix_names(df)
@@ -534,49 +536,42 @@ if run:
 
     df = add_date_coeff(df, date_ref_input)
 
-    df["ScaleKey"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], r["Category"]), axis=1)
-    df["Perf"] = df.apply(lambda r: score_to_points(r["Score"], scale_df, r["ScaleKey"]), axis=1)
-
+    # Calcul des performances
     df["ScaleKey_S"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], "S"), axis=1)
     df["ScaleKey_J"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], "J"), axis=1)
-    df["Perf_S"] = df.apply(lambda r: score_to_points(r["Score"], scale_df, r["ScaleKey_S"]), axis=1)
-    df["Perf_J"] = df.apply(lambda r: score_to_points(r["Score"], scale_df, r["ScaleKey_J"]), axis=1)
+    df["Perf_S"] = df.apply(lambda r: score_to_points(r["Score"], scale_df_c, r["ScaleKey_S"]), axis=1)
+    df["Perf_J"] = df.apply(lambda r: score_to_points(r["Score"], scale_df_c, r["ScaleKey_J"]), axis=1)
+    df["Finale_score"] = df["Rank"].apply(lambda x: fp_map.get(int(x), np.nan) if pd.notna(x) else np.nan)
 
-    def rank_to_finalpts(x):
-        if pd.isna(x):
-            return np.nan
-        try:
-            return fp_map.get(int(x), np.nan)
-        except Exception:
-            return np.nan
-
-    df["Finale_score"] = df["Rank"].apply(rank_to_finalpts)
-
-    df["Total_Score_J"] = df["Perf_J"] + np.where(df["Finale_score"].isna(), 0, df["Finale_score"])
-    df["Total_Score_S"] = df["Perf_S"] + np.where(df["Finale_score"].isna(), 0, df["Finale_score"])
-
+    df["Total_Score_J"] = df["Perf_J"] + df["Finale_score"].fillna(0)
+    df["Total_Score_S"] = df["Perf_S"] + df["Finale_score"].fillna(0)
     df["%J"] = (df["Total_Score_J"] / DENOM) * 100.0
     df["%S"] = (df["Total_Score_S"] / DENOM) * 100.0
 
     df = df[df["Distance"].notna()].copy()
-
     final_tbl = make_final_table(df)
+
+    # SAUVEGARDE DANS LE SESSION STATE
+    st.session_state["final_tbl"] = final_tbl
+    st.session_state["df_clean"] = df
+    st.session_state["scale_df_used"] = scale_df_c
+    st.session_state["fp_df_used"] = fp
+
+# --- AFFICHAGE (Persistant) ---
+if st.session_state["final_tbl"] is not None:
+    df = st.session_state["df_clean"]
+    final_tbl = st.session_state["final_tbl"]
+    scale_df_used = st.session_state["scale_df_used"]
+    fp_used = st.session_state["fp_df_used"]
 
     tab1, tab2 = st.tabs(["Données clean (long)", "Tableau final"])
 
     with tab1:
         st.dataframe(df, use_container_width=True, height=520)
-
         st.subheader("Détail calcul %S compet / %J compet")
         
-        if "athlete_select" not in st.session_state:
-            st.session_state["athlete_select"] = sorted(df["Athlete"].dropna().unique())[0]
-
-        athlete_debug = st.selectbox(
-            "Choisir une athlète",
-            sorted(df["Athlete"].dropna().unique()),
-            key="athlete_select"
-        )
+        athlete_list = sorted(df["Athlete"].dropna().unique())
+        athlete_debug = st.selectbox("Choisir une athlète", athlete_list, key="athlete_sel")
 
         debug_df = df[df["Athlete"] == athlete_debug].copy()
         debug_df["Poids_%S_compet"] = debug_df["Coeff"] * debug_df["date_coeff"]
@@ -592,88 +587,52 @@ if run:
                 "Poids_%S_compet", "Contribution_%S_compet",
                 "Poids_%J_compet", "Contribution_%J_compet"
             ]],
-            use_container_width=True,
-            height=320
+            use_container_width=True, height=320
         )
 
         if not debug_df.empty:
-            num_s = debug_df["Contribution_%S_compet"].sum()
-            den_s = debug_df["Poids_%S_compet"].sum()
-            res_s = num_s / den_s if den_s != 0 else np.nan
+            def get_res(num_col, den_col):
+                n, d = debug_df[num_col].sum(), debug_df[den_col].sum()
+                return n, d, (n / d if d != 0 else np.nan)
 
-            num_j = debug_df["Contribution_%J_compet"].sum()
-            den_j = debug_df["Poids_%J_compet"].sum()
-            res_j = num_j / den_j if den_j != 0 else np.nan
+            ns, ds, rs = get_res("Contribution_%S_compet", "Poids_%S_compet")
+            nj, dj, rj = get_res("Contribution_%J_compet", "Poids_%J_compet")
 
-            st.write("**Formule %S compet**")
-            st.write(f"Numérateur = Σ(%S × coeff_compet × coeff_temps) = {num_s:.4f}")
-            st.write(f"Dénominateur = Σ(coeff_compet × coeff_temps) = {den_s:.4f}")
-            st.write(f"%S compet = {res_s:.4f}")
-
-            st.write("**Formule %J compet**")
-            st.write(f"Numérateur = Σ(%J × coeff_compet × coeff_temps) = {num_j:.4f}")
-            st.write(f"Dénominateur = Σ(coeff_compet × coeff_temps) = {den_j:.4f}")
-            st.write(f"%J compet = {res_j:.4f}")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.write("**Formule %S compet**")
+                st.caption(f"Num (Σ %S * coeffs): {ns:.4f} / Den (Σ coeffs): {ds:.4f} = **{rs:.4f}**")
+            with c2:
+                st.write("**Formule %J compet**")
+                st.caption(f"Num (Σ %J * coeffs): {nj:.4f} / Den (Σ coeffs): {dj:.4f} = **{rj:.4f}**")
 
     with tab2:
         st.dataframe(final_tbl, use_container_width=True, height=520)
-
         st.subheader("Exports")
         c1, c2 = st.columns(2)
-
         with c1:
-            csv_bytes = final_tbl.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                "Télécharger tableau_final.csv",
-                data=csv_bytes,
-                file_name="tableau_final.csv",
-                mime="text/csv"
-            )
-
+            st.download_button("Télécharger CSV", data=final_tbl.to_csv(index=False).encode("utf-8"), file_name="tableau_final.csv", mime="text/csv")
         with c2:
             out = io.BytesIO()
             with pd.ExcelWriter(out, engine="openpyxl") as writer:
                 final_tbl.to_excel(writer, index=False, sheet_name="Final")
                 df.to_excel(writer, index=False, sheet_name="Clean_Long")
-                scale_df.to_excel(writer, index=False, sheet_name="Scale")
-                fp.to_excel(writer, index=False, sheet_name="FinalPoints")
-
+                scale_df_used.to_excel(writer, index=False, sheet_name="Scale")
+                fp_used.to_excel(writer, index=False, sheet_name="FinalPoints")
+                
+                # Formatage conditionnel
                 ws = writer.book["Final"]
-
-                red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
-                orange_fill = PatternFill(start_color="FFD580", end_color="FFD580", fill_type="solid")
-                green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-
-                headers = [cell.value for cell in ws[1]]
-
-                cols_target = []
+                red = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+                orange = PatternFill(start_color="FFD580", end_color="FFD580", fill_type="solid")
+                green = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+                
+                headers = [c.value for c in ws[1]]
                 for name in ["%S", "%J"]:
                     if name in headers:
-                        cols_target.append(headers.index(name) + 1)
+                        col_letter = ws.cell(row=1, column=headers.index(name)+1).column_letter
+                        cell_range = f"{col_letter}2:{col_letter}{ws.max_row}"
+                        ws.conditional_formatting.add(cell_range, CellIsRule(operator='lessThan', formula=['30'], fill=red))
+                        ws.conditional_formatting.add(cell_range, CellIsRule(operator='between', formula=['30', '70'], fill=orange))
+                        ws.conditional_formatting.add(cell_range, CellIsRule(operator='greaterThan', formula=['70'], fill=green))
 
-                max_row = ws.max_row
-
-                for col in cols_target:
-                    col_letter = ws.cell(row=1, column=col).column_letter
-                    cell_range = f"{col_letter}2:{col_letter}{max_row}"
-
-                    ws.conditional_formatting.add(
-                        cell_range,
-                        CellIsRule(operator='lessThan', formula=['30'], fill=red_fill)
-                    )
-                    ws.conditional_formatting.add(
-                        cell_range,
-                        CellIsRule(operator='between', formula=['30', '70'], fill=orange_fill)
-                    )
-                    ws.conditional_formatting.add(
-                        cell_range,
-                        CellIsRule(operator='greaterThan', formula=['70'], fill=green_fill)
-                    )
-
-            out.seek(0)
-            st.download_button(
-                "Télécharger tableau_final.xlsx",
-                data=out.getvalue(),
-                file_name="tableau_final.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            st.download_button("Télécharger XLSX", data=out.getvalue(), file_name="tableau_final.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
