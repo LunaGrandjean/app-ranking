@@ -85,7 +85,7 @@ def extract_sheet_long(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
         score = pd.to_numeric(raw.iloc[athlete_start_row:, col], errors="coerce")
         rank = pd.to_numeric(raw.iloc[athlete_start_row:, col + 1], errors="coerce")
 
-        df = pd.DataFrame({
+        df_part = pd.DataFrame({
             "Athlete": athletes,
             "Category": categories,
             "Competition": comp_name,
@@ -95,10 +95,10 @@ def extract_sheet_long(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
             "Sheet": sheet_name
         })
 
-        df = df[df["Athlete"].notna()]
-        df = df[~(df["Score"].isna() & df["Rank"].isna())]
+        df_part = df_part[df_part["Athlete"].notna()]
+        df_part = df_part[~(df_part["Score"].isna() & df_part["Rank"].isna())]
 
-        parts.append(df)
+        parts.append(df_part)
 
     if not parts:
         return pd.DataFrame(columns=["Athlete", "Category", "Competition", "Date", "Score", "Rank", "Sheet"])
@@ -241,7 +241,6 @@ def score_to_points(score: float, scale_df: pd.DataFrame, key: str) -> float:
 
     min_threshold = sub["MinScore"].min()
 
-    # logique R: Score > seuil
     if score <= min_threshold:
         return 0.0
 
@@ -404,19 +403,9 @@ def make_final_table(df: pd.DataFrame) -> pd.DataFrame:
     final_tbl = pd.DataFrame(rows)
 
     ordered_cols = [
-        "Athlete",
-        "Distance",
-        "%J",
-        "%J compet",
-        "Finale J",
-        "%S",
-        "%S compet",
-        "Finale S",
-        "Moyenne",
-        "HP",
-        "Nombre de compet",
-        "Sexe",
-        "Catégorie"
+        "Athlete", "Distance", "%J", "%J compet", "Finale J",
+        "%S", "%S compet", "Finale S", "Moyenne", "HP",
+        "Nombre de compet", "Sexe", "Catégorie"
     ]
 
     return final_tbl[ordered_cols]
@@ -519,28 +508,23 @@ if run:
         st.error("Le barème doit contenir les colonnes: ScaleKey, MinScore, Points")
         st.stop()
 
-    # Clean scale (barème déjà sur 100)
     scale_df = scale_df.copy()
     scale_df["MinScore"] = pd.to_numeric(scale_df["MinScore"], errors="coerce")
     scale_df["Points"] = pd.to_numeric(scale_df["Points"], errors="coerce")
     scale_df = scale_df.dropna(subset=["ScaleKey", "MinScore", "Points"])
     scale_df = scale_df.sort_values(["ScaleKey", "MinScore"], ascending=[True, False]).reset_index(drop=True)
 
-    # Final points map
     fp = final_points_df.copy()
     fp["Rank"] = pd.to_numeric(fp["Rank"], errors="coerce")
     fp["FinalPoints"] = pd.to_numeric(fp["FinalPoints"], errors="coerce")
     fp = fp.dropna(subset=["Rank", "FinalPoints"])
     fp_map = dict(zip(fp["Rank"].astype(int), fp["FinalPoints"].astype(float)))
 
-    # Extract data
     df = extract_workbook(data_file.getvalue())
 
-    # Clean
     df = df[df["Score"].fillna(0) > 0].copy()
     df = df[df["Score"].notna()].copy()
 
-    # Add fields
     df = derive_sex_distance(df)
     df = add_comp_coeff(df, coeff_df)
     df = fix_names(df)
@@ -548,11 +532,9 @@ if run:
     if athletes_to_remove:
         df = df[~df["Athlete"].isin(athletes_to_remove)].copy()
 
-    # coeff temps avec date de référence choisie
     df = add_date_coeff(df, date_ref_input)
 
     df["ScaleKey"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], r["Category"]), axis=1)
-
     df["Perf"] = df.apply(lambda r: score_to_points(r["Score"], scale_df, r["ScaleKey"]), axis=1)
 
     df["ScaleKey_S"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], "S"), axis=1)
@@ -583,25 +565,24 @@ if run:
     tab1, tab2 = st.tabs(["Données clean (long)", "Tableau final"])
 
     with tab1:
-    st.dataframe(df, use_container_width=True, height=520)
+        st.dataframe(df, use_container_width=True, height=520)
 
-    st.subheader("Détail calcul %S compet / %J compet")
-    
-    # Correction ici : l'intérieur du if doit être indenté
-    if "athlete_select" not in st.session_state:
-        st.session_state["athlete_select"] = sorted(df["Athlete"].dropna().unique())[0]
+        st.subheader("Détail calcul %S compet / %J compet")
+        
+        if "athlete_select" not in st.session_state:
+            st.session_state["athlete_select"] = sorted(df["Athlete"].dropna().unique())[0]
 
-    athlete_debug = st.selectbox(
-        "Choisir une athlète",
-        sorted(df["Athlete"].dropna().unique()),
-        key="athlete_select"
-    )
+        athlete_debug = st.selectbox(
+            "Choisir une athlète",
+            sorted(df["Athlete"].dropna().unique()),
+            key="athlete_select"
+        )
 
-    debug_df = df[df["Athlete"] == athlete_debug].copy()
-    debug_df["Poids_%S_compet"] = debug_df["Coeff"] * debug_df["date_coeff"]
-    debug_df["Contribution_%S_compet"] = debug_df["%S"] * debug_df["Poids_%S_compet"]
-    debug_df["Poids_%J_compet"] = debug_df["Coeff"] * debug_df["date_coeff"]
-    debug_df["Contribution_%J_compet"] = debug_df["%J"] * debug_df["Poids_%J_compet"]
+        debug_df = df[df["Athlete"] == athlete_debug].copy()
+        debug_df["Poids_%S_compet"] = debug_df["Coeff"] * debug_df["date_coeff"]
+        debug_df["Contribution_%S_compet"] = debug_df["%S"] * debug_df["Poids_%S_compet"]
+        debug_df["Poids_%J_compet"] = debug_df["Coeff"] * debug_df["date_coeff"]
+        debug_df["Contribution_%J_compet"] = debug_df["%J"] * debug_df["Poids_%J_compet"]
 
         st.dataframe(
             debug_df[[
@@ -690,7 +671,6 @@ if run:
                     )
 
             out.seek(0)
-
             st.download_button(
                 "Télécharger tableau_final.xlsx",
                 data=out.getvalue(),
