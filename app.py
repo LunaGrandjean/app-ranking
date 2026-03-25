@@ -587,8 +587,9 @@ if run:
 
         st.subheader("Détail calcul %S compet / %J compet")
         athlete_debug = st.selectbox(
-            "Choisir une athlète",
-            sorted(df["Athlete"].dropna().unique())
+            "Choisir un athlète",
+            sorted(df["Athlete"].dropna().unique()),
+            key="athlete_select"
         )
 
         debug_df = df[df["Athlete"] == athlete_debug].copy()
