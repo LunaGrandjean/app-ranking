@@ -583,24 +583,25 @@ if run:
     tab1, tab2 = st.tabs(["Données clean (long)", "Tableau final"])
 
     with tab1:
-        st.dataframe(df, use_container_width=True, height=520)
+    st.dataframe(df, use_container_width=True, height=520)
 
-        st.subheader("Détail calcul %S compet / %J compet")
-        
-        if "athlete_select" not in st.session_state:
-        st.session_state["athlete_select"] = sorted(df["Athlete"].dropna().unique())[0]
+    st.subheader("Détail calcul %S compet / %J compet")
     
-        athlete_debug = st.selectbox(
-            "Choisir une athlète",
-            sorted(df["Athlete"].dropna().unique()),
-            key="athlete_select"
-        )
+    # Correction ici : l'intérieur du if doit être indenté
+    if "athlete_select" not in st.session_state:
+        st.session_state["athlete_select"] = sorted(df["Athlete"].dropna().unique())[0]
 
-        debug_df = df[df["Athlete"] == athlete_debug].copy()
-        debug_df["Poids_%S_compet"] = debug_df["Coeff"] * debug_df["date_coeff"]
-        debug_df["Contribution_%S_compet"] = debug_df["%S"] * debug_df["Poids_%S_compet"]
-        debug_df["Poids_%J_compet"] = debug_df["Coeff"] * debug_df["date_coeff"]
-        debug_df["Contribution_%J_compet"] = debug_df["%J"] * debug_df["Poids_%J_compet"]
+    athlete_debug = st.selectbox(
+        "Choisir une athlète",
+        sorted(df["Athlete"].dropna().unique()),
+        key="athlete_select"
+    )
+
+    debug_df = df[df["Athlete"] == athlete_debug].copy()
+    debug_df["Poids_%S_compet"] = debug_df["Coeff"] * debug_df["date_coeff"]
+    debug_df["Contribution_%S_compet"] = debug_df["%S"] * debug_df["Poids_%S_compet"]
+    debug_df["Poids_%J_compet"] = debug_df["Coeff"] * debug_df["date_coeff"]
+    debug_df["Contribution_%J_compet"] = debug_df["%J"] * debug_df["Poids_%J_compet"]
 
         st.dataframe(
             debug_df[[
