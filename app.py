@@ -426,7 +426,7 @@ def make_final_table(df: pd.DataFrame) -> pd.DataFrame:
 # Streamlit UI
 # =========================
 st.set_page_config(page_title="Ranking App", layout="wide")
-st.title("📊 Ranking App (Excel → paramètres → tableau final)")
+st.title("Ranking App (Excel → paramètres → tableau final)")
 
 colA, colB = st.columns(2)
 with colA:
