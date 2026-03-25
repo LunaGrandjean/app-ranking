@@ -8,9 +8,7 @@ from openpyxl.styles import PatternFill
 from openpyxl.formatting.rule import CellIsRule
 
 EXCEL_ENGINE = "openpyxl"
-
-# Permanent scale: 50 -> 100 (double everything)
-POINTS_FACTOR = 2.0  # Perf: 35->70, Final: 15->30, Total: 50->100
+DENOM = 100.0  # barème déjà sur 100
 
 
 # =========================
@@ -241,14 +239,12 @@ def score_to_points(score: float, scale_df: pd.DataFrame, key: str) -> float:
     if sub.empty:
         return np.nan
 
-    # plus petit seuil du barème
     min_threshold = sub["MinScore"].min()
 
-    # si score <= plus petit seuil, on met 0
+    # logique R: Score > seuil
     if score <= min_threshold:
         return 0.0
 
-    # équivalent R : Score > seuil
     for _, row in sub.iterrows():
         if score > row["MinScore"]:
             return float(row["Points"])
@@ -308,13 +304,12 @@ def default_final_points():
 # =========================
 # 7) Time coefficient
 # =========================
-def add_date_coeff(df: pd.DataFrame) -> pd.DataFrame:
+def add_date_coeff(df: pd.DataFrame, date_ref: dt.date) -> pd.DataFrame:
     df = df.copy()
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.date
-    today = dt.date.today()
 
     diff_months = df["Date"].apply(
-        lambda d: np.nan if pd.isna(d) else (today.year - d.year) * 12 + (today.month - d.month)
+        lambda d: np.nan if pd.isna(d) else (date_ref.year - d.year) * 12 + (date_ref.month - d.month)
     )
     k = 3.0
 
@@ -395,12 +390,10 @@ def make_final_table(df: pd.DataFrame) -> pd.DataFrame:
             "Catégorie": g["Category"].dropna().iloc[0] if g["Category"].notna().any() else np.nan,
         }
 
-        # moins de 5 compet: mettre à 0 uniquement les %
         if n12 < 5:
             for kcol in ["%J", "%J compet", "%S", "%S compet"]:
                 row[kcol] = 0
 
-        # seniors: pas de colonnes junior
         if str(row["Catégorie"]).strip().upper() == "S":
             row["%J"] = np.nan
             row["%J compet"] = np.nan
@@ -440,6 +433,11 @@ with colA:
     data_file = st.file_uploader("📥 Fichier résultats", type=["xlsx"], accept_multiple_files=False)
 with colB:
     scale_file = st.file_uploader("📥 Point scale", type=["xlsx"], accept_multiple_files=False)
+
+st.divider()
+
+st.subheader("Date de référence pour le coeff temps")
+date_ref_input = st.date_input("Date de référence", value=dt.date.today())
 
 st.divider()
 
@@ -521,21 +519,18 @@ if run:
         st.error("Le barème doit contenir les colonnes: ScaleKey, MinScore, Points")
         st.stop()
 
-    # Clean scale + double perf points
+    # Clean scale (barème déjà sur 100)
     scale_df = scale_df.copy()
     scale_df["MinScore"] = pd.to_numeric(scale_df["MinScore"], errors="coerce")
     scale_df["Points"] = pd.to_numeric(scale_df["Points"], errors="coerce")
     scale_df = scale_df.dropna(subset=["ScaleKey", "MinScore", "Points"])
     scale_df = scale_df.sort_values(["ScaleKey", "MinScore"], ascending=[True, False]).reset_index(drop=True)
-    # scale_df["Points"] = scale_df["Points"] * POINTS_FACTOR
 
     # Final points map
     fp = final_points_df.copy()
     fp["Rank"] = pd.to_numeric(fp["Rank"], errors="coerce")
     fp["FinalPoints"] = pd.to_numeric(fp["FinalPoints"], errors="coerce")
     fp = fp.dropna(subset=["Rank", "FinalPoints"])
-
-    # PAS de x2 ici car les valeurs par défaut sont déjà doublées
     fp_map = dict(zip(fp["Rank"].astype(int), fp["FinalPoints"].astype(float)))
 
     # Extract data
@@ -553,7 +548,8 @@ if run:
     if athletes_to_remove:
         df = df[~df["Athlete"].isin(athletes_to_remove)].copy()
 
-    df = add_date_coeff(df)
+    # coeff temps avec date de référence choisie
+    df = add_date_coeff(df, date_ref_input)
 
     df["ScaleKey"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], r["Category"]), axis=1)
 
@@ -577,7 +573,6 @@ if run:
     df["Total_Score_J"] = df["Perf_J"] + np.where(df["Finale_score"].isna(), 0, df["Finale_score"])
     df["Total_Score_S"] = df["Perf_S"] + np.where(df["Finale_score"].isna(), 0, df["Finale_score"])
 
-    DENOM = 50.0 * POINTS_FACTOR  # = 100
     df["%J"] = (df["Total_Score_J"] / DENOM) * 100.0
     df["%S"] = (df["Total_Score_S"] / DENOM) * 100.0
 
@@ -586,8 +581,53 @@ if run:
     final_tbl = make_final_table(df)
 
     tab1, tab2 = st.tabs(["Données clean (long)", "Tableau final"])
+
     with tab1:
         st.dataframe(df, use_container_width=True, height=520)
+
+        st.subheader("Détail calcul %S compet / %J compet")
+        athlete_debug = st.selectbox(
+            "Choisir une athlète",
+            sorted(df["Athlete"].dropna().unique())
+        )
+
+        debug_df = df[df["Athlete"] == athlete_debug].copy()
+        debug_df["Poids_%S_compet"] = debug_df["Coeff"] * debug_df["date_coeff"]
+        debug_df["Contribution_%S_compet"] = debug_df["%S"] * debug_df["Poids_%S_compet"]
+        debug_df["Poids_%J_compet"] = debug_df["Coeff"] * debug_df["date_coeff"]
+        debug_df["Contribution_%J_compet"] = debug_df["%J"] * debug_df["Poids_%J_compet"]
+
+        st.dataframe(
+            debug_df[[
+                "Athlete", "Distance", "Competition", "Date", "Score",
+                "Perf_S", "Perf_J", "Finale_score", "%S", "%J",
+                "Coeff", "date_coeff",
+                "Poids_%S_compet", "Contribution_%S_compet",
+                "Poids_%J_compet", "Contribution_%J_compet"
+            ]],
+            use_container_width=True,
+            height=320
+        )
+
+        if not debug_df.empty:
+            num_s = debug_df["Contribution_%S_compet"].sum()
+            den_s = debug_df["Poids_%S_compet"].sum()
+            res_s = num_s / den_s if den_s != 0 else np.nan
+
+            num_j = debug_df["Contribution_%J_compet"].sum()
+            den_j = debug_df["Poids_%J_compet"].sum()
+            res_j = num_j / den_j if den_j != 0 else np.nan
+
+            st.write("**Formule %S compet**")
+            st.write(f"Numérateur = Σ(%S × coeff_compet × coeff_temps) = {num_s:.4f}")
+            st.write(f"Dénominateur = Σ(coeff_compet × coeff_temps) = {den_s:.4f}")
+            st.write(f"%S compet = {res_s:.4f}")
+
+            st.write("**Formule %J compet**")
+            st.write(f"Numérateur = Σ(%J × coeff_compet × coeff_temps) = {num_j:.4f}")
+            st.write(f"Dénominateur = Σ(coeff_compet × coeff_temps) = {den_j:.4f}")
+            st.write(f"%J compet = {res_j:.4f}")
+
     with tab2:
         st.dataframe(final_tbl, use_container_width=True, height=520)
 
@@ -620,7 +660,7 @@ if run:
                 headers = [cell.value for cell in ws[1]]
 
                 cols_target = []
-                for name in ["%S compet", "%J compet"]:
+                for name in ["%S", "%J"]:
                     if name in headers:
                         cols_target.append(headers.index(name) + 1)
 
@@ -651,4 +691,3 @@ if run:
                 file_name="tableau_final.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
-
