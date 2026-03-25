@@ -586,8 +586,12 @@ if run:
         st.dataframe(df, use_container_width=True, height=520)
 
         st.subheader("Détail calcul %S compet / %J compet")
+        
+        if "athlete_select" not in st.session_state:
+        st.session_state["athlete_select"] = sorted(df["Athlete"].dropna().unique())[0]
+    
         athlete_debug = st.selectbox(
-            "Choisir un athlète",
+            "Choisir une athlète",
             sorted(df["Athlete"].dropna().unique()),
             key="athlete_select"
         )
