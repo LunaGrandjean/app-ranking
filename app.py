@@ -323,21 +323,22 @@ def add_date_coeff(df: pd.DataFrame, date_ref: dt.date) -> pd.DataFrame:
     df = df.copy()
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.date
 
-    diff_months = df["Date"].apply(
-        lambda d: np.nan if pd.isna(d) else (date_ref.year - d.year) * 12 + (date_ref.month - d.month)
-    )
-    k = 3.0
-
-    def f(m):
-        if pd.isna(m):
+    def f(d):
+        if pd.isna(d):
             return np.nan
-        if m <= 4:
-            return 1.0
-        if m >= 12:
-            return 0.0
-        return (1 - np.exp(-k * (12 - m) / (12 - 4))) / (1 - np.exp(-k))
 
-    df["date_coeff"] = diff_months.apply(f)
+        age_days = (date_ref - d).days
+
+        if age_days <= 122:   # ~4 months
+            return 1.0
+        if age_days > 365:
+            return 0.0
+
+        k = 3.0
+        x = (365 - age_days) / (365 - 122)
+        return (1 - np.exp(-k * x)) / (1 - np.exp(-k))
+
+    df["date_coeff"] = df["Date"].apply(f)
     return df
 
 
@@ -360,22 +361,19 @@ def make_final_table(df: pd.DataFrame, date_ref: dt.date) -> pd.DataFrame:
         return float((vals[mask] * w[mask]).sum() / denom)
 
     rows = []
-    for (ath, dist), g in df.groupby(["Athlete", "Distance"], dropna=False):
+    for (ath, dist, sexe, cat), g in df.groupby(["Athlete", "Distance", "Sexe", "Category"], dropna=False):
         g = g.copy()
 
         g["is_12m"] = g["Date"].apply(lambda d: within_last_12_months(d, date_ref))
         g_valid = g[g["is_12m"]].copy()
 
         n12 = int((~g_valid["Score"].isna()).sum())
-
         av12 = float(g_valid["Score"].mean()) if g_valid["Score"].notna().any() else np.nan
         hp12 = float(g_valid["Score"].max()) if g_valid["Score"].notna().any() else np.nan
 
-        # Normal % = only valid competitions, weighted by competition coeff only
         pctJ = weighted_mean(g_valid["%J"], g_valid["Coeff"])
         pctS = weighted_mean(g_valid["%S"], g_valid["Coeff"])
 
-        # Compet % = all competitions, but old ones naturally go to zero via time coeff
         weights_time = g["Coeff"] * g["date_coeff"]
         pctJ_t = weighted_mean(g["%J"], weights_time)
         pctS_t = weighted_mean(g["%S"], weights_time)
@@ -394,15 +392,15 @@ def make_final_table(df: pd.DataFrame, date_ref: dt.date) -> pd.DataFrame:
             "Moyenne": av12,
             "HP": hp12,
             "Nombre de compet": n12,
-            "Sexe": g["Sexe"].dropna().iloc[0] if g["Sexe"].notna().any() else np.nan,
-            "Catégorie": g["Category"].dropna().iloc[0] if g["Category"].notna().any() else np.nan,
+            "Sexe": sexe,
+            "Catégorie": cat,
         }
 
         if n12 < 5:
             for kcol in ["%J", "%J compet", "%S", "%S compet"]:
                 row[kcol] = 0
 
-        if str(row["Catégorie"]).strip().upper() == "S":
+        if str(cat).strip().upper() == "S":
             row["%J"] = np.nan
             row["%J compet"] = np.nan
             row["Finale J"] = np.nan
@@ -536,7 +534,6 @@ if run:
     scale_df_c["MinScore"] = pd.to_numeric(scale_df_c["MinScore"], errors="coerce")
     scale_df_c["Points"] = pd.to_numeric(scale_df_c["Points"], errors="coerce")
     scale_df_c = scale_df_c.dropna(subset=["ScaleKey", "MinScore", "Points"])
-    scale_df_c = round_existing_columns(scale_df_c, ["MinScore", "Points"], 1)
 
     fp = final_points_df.copy()
     fp_map = dict(zip(pd.to_numeric(fp["Rank"]).astype(int), pd.to_numeric(fp["FinalPoints"]).astype(float)))
@@ -567,13 +564,6 @@ if run:
     df["%S"] = (df["Total_Score_S"] / DENOM) * 100.0
 
     df = df[df["Distance"].notna()].copy()
-
-    df = round_existing_columns(
-        df,
-        ["Score", "Rank", "Coeff", "date_coeff", "Perf_S", "Perf_J", "Finale_score",
-         "Total_Score_J", "Total_Score_S", "%J", "%S"],
-        1
-    )
 
     final_tbl = make_final_table(df, date_ref_input)
 
