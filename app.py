@@ -33,6 +33,14 @@ def excel_date_to_date(x):
     return dtv.date() if not pd.isna(dtv) else pd.NaT
 
 
+def round_existing_columns(df: pd.DataFrame, cols: list, decimals: int = 1) -> pd.DataFrame:
+    df = df.copy()
+    for col in cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").round(decimals)
+    return df
+
+
 # =========================
 # 1) Extract workbook (raw FFTir Excel -> long df)
 # =========================
@@ -372,8 +380,6 @@ def make_final_table(df: pd.DataFrame, date_ref: dt.date) -> pd.DataFrame:
         pctJ_t = weighted_mean(g["%J"], weights_time)
         pctS_t = weighted_mean(g["%S"], weights_time)
 
-        # correction principale :
-        # les anciennes compétitions ne comptent plus non plus dans %J et %S
         pctJ = weighted_mean(g["%J"], weights_time)
         pctS = weighted_mean(g["%S"], weights_time)
 
@@ -414,7 +420,18 @@ def make_final_table(df: pd.DataFrame, date_ref: dt.date) -> pd.DataFrame:
         "Nombre de compet", "Sexe", "Catégorie"
     ]
 
-    return final_tbl[ordered_cols]
+    final_tbl = final_tbl[ordered_cols]
+
+    final_tbl = round_existing_columns(
+        final_tbl,
+        ["%J", "%J compet", "Finale J", "%S", "%S compet", "Finale S", "Moyenne", "HP"],
+        1
+    )
+
+    if "Nombre de compet" in final_tbl.columns:
+        final_tbl["Nombre de compet"] = pd.to_numeric(final_tbl["Nombre de compet"], errors="coerce").fillna(0).astype(int)
+
+    return final_tbl
 
 
 # =========================
@@ -524,10 +541,12 @@ if run:
     scale_df_c["MinScore"] = pd.to_numeric(scale_df_c["MinScore"], errors="coerce")
     scale_df_c["Points"] = pd.to_numeric(scale_df_c["Points"], errors="coerce")
     scale_df_c = scale_df_c.dropna(subset=["ScaleKey", "MinScore", "Points"])
+    scale_df_c = round_existing_columns(scale_df_c, ["MinScore", "Points"], 1)
 
     # Final points map
     fp = final_points_df.copy()
     fp_map = dict(zip(pd.to_numeric(fp["Rank"]).astype(int), pd.to_numeric(fp["FinalPoints"]).astype(float)))
+    fp = round_existing_columns(fp, ["Rank", "FinalPoints"], 1)
 
     # Extraction et nettoyage
     df = extract_workbook(data_file.getvalue())
@@ -555,6 +574,14 @@ if run:
     df["%S"] = (df["Total_Score_S"] / DENOM) * 100.0
 
     df = df[df["Distance"].notna()].copy()
+
+    df = round_existing_columns(
+        df,
+        ["Score", "Rank", "Coeff", "date_coeff", "Perf_S", "Perf_J", "Finale_score",
+         "Total_Score_J", "Total_Score_S", "%J", "%S"],
+        1
+    )
+
     final_tbl = make_final_table(df, date_ref_input)
 
     # SAUVEGARDE DANS LE SESSION STATE
@@ -585,6 +612,14 @@ if st.session_state["final_tbl"] is not None:
         debug_df["Poids_%J_compet"] = debug_df["Coeff"] * debug_df["date_coeff"]
         debug_df["Contribution_%J_compet"] = debug_df["%J"] * debug_df["Poids_%J_compet"]
 
+        debug_df = round_existing_columns(
+            debug_df,
+            ["Score", "Rank", "Perf_S", "Perf_J", "Finale_score", "%S", "%J",
+             "Coeff", "date_coeff", "Poids_%S_compet", "Contribution_%S_compet",
+             "Poids_%J_compet", "Contribution_%J_compet"],
+            1
+        )
+
         st.dataframe(
             debug_df[[
                 "Athlete", "Distance", "Competition", "Date", "Score",
@@ -607,17 +642,22 @@ if st.session_state["final_tbl"] is not None:
             c1, c2 = st.columns(2)
             with c1:
                 st.write("**Formule %S compet**")
-                st.caption(f"Num (Σ %S * coeffs): {ns:.4f} / Den (Σ coeffs): {ds:.4f} = **{rs:.4f}**")
+                st.caption(f"Num (Σ %S * coeffs): {ns:.1f} / Den (Σ coeffs): {ds:.1f} = **{rs:.1f}**")
             with c2:
                 st.write("**Formule %J compet**")
-                st.caption(f"Num (Σ %J * coeffs): {nj:.4f} / Den (Σ coeffs): {dj:.4f} = **{rj:.4f}**")
+                st.caption(f"Num (Σ %J * coeffs): {nj:.1f} / Den (Σ coeffs): {dj:.1f} = **{rj:.1f}**")
 
     with tab2:
         st.dataframe(final_tbl, use_container_width=True, height=520)
         st.subheader("Exports")
         c1, c2 = st.columns(2)
         with c1:
-            st.download_button("Télécharger CSV", data=final_tbl.to_csv(index=False).encode("utf-8"), file_name="tableau_final.csv", mime="text/csv")
+            st.download_button(
+                "Télécharger CSV",
+                data=final_tbl.to_csv(index=False).encode("utf-8"),
+                file_name="tableau_final.csv",
+                mime="text/csv"
+            )
         with c2:
             out = io.BytesIO()
             with pd.ExcelWriter(out, engine="openpyxl") as writer:
@@ -626,7 +666,6 @@ if st.session_state["final_tbl"] is not None:
                 scale_df_used.to_excel(writer, index=False, sheet_name="Scale")
                 fp_used.to_excel(writer, index=False, sheet_name="FinalPoints")
                 
-                # Formatage conditionnel
                 ws = writer.book["Final"]
                 red = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
                 orange = PatternFill(start_color="FFD580", end_color="FFD580", fill_type="solid")
@@ -635,10 +674,15 @@ if st.session_state["final_tbl"] is not None:
                 headers = [c.value for c in ws[1]]
                 for name in ["%S", "%J"]:
                     if name in headers:
-                        col_letter = ws.cell(row=1, column=headers.index(name)+1).column_letter
+                        col_letter = ws.cell(row=1, column=headers.index(name) + 1).column_letter
                         cell_range = f"{col_letter}2:{col_letter}{ws.max_row}"
                         ws.conditional_formatting.add(cell_range, CellIsRule(operator='lessThan', formula=['30'], fill=red))
                         ws.conditional_formatting.add(cell_range, CellIsRule(operator='between', formula=['30', '70'], fill=orange))
                         ws.conditional_formatting.add(cell_range, CellIsRule(operator='greaterThan', formula=['70'], fill=green))
 
-            st.download_button("Télécharger XLSX", data=out.getvalue(), file_name="tableau_final.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.download_button(
+                "Télécharger XLSX",
+                data=out.getvalue(),
+                file_name="tableau_final.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
