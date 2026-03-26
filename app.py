@@ -8,11 +8,11 @@ from openpyxl.styles import PatternFill
 from openpyxl.formatting.rule import CellIsRule
 
 EXCEL_ENGINE = "openpyxl"
-DENOM = 100.0  # barème déjà sur 100
+DENOM = 100.0  # scale already on 100
 
 
 # =========================
-# Utils: date conversion
+# Utils
 # =========================
 def excel_date_to_date(x):
     if pd.isna(x):
@@ -33,6 +33,12 @@ def excel_date_to_date(x):
     return dtv.date() if not pd.isna(dtv) else pd.NaT
 
 
+def squish(x) -> str:
+    if pd.isna(x):
+        return ""
+    return re.sub(r"\s+", " ", str(x)).strip()
+
+
 def round_existing_columns(df: pd.DataFrame, cols: list, decimals: int = 1) -> pd.DataFrame:
     df = df.copy()
     for col in cols:
@@ -41,15 +47,15 @@ def round_existing_columns(df: pd.DataFrame, cols: list, decimals: int = 1) -> p
     return df
 
 
+def within_last_12_months(d, date_ref):
+    if pd.isna(d) or pd.isna(date_ref):
+        return False
+    return d >= (date_ref - dt.timedelta(days=365))
+
+
 # =========================
 # 1) Extract workbook (raw FFTir Excel -> long df)
 # =========================
-def squish(x) -> str:
-    if pd.isna(x):
-        return ""
-    return re.sub(r"\s+", " ", str(x)).strip()
-
-
 def extract_sheet_long(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
     raw = raw.copy()
 
@@ -342,23 +348,6 @@ def make_final_table(df: pd.DataFrame, date_ref: dt.date) -> pd.DataFrame:
     df = df.copy()
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.date
 
-    def n_comp_12m(g):
-        if pd.isna(date_ref):
-            return 0
-        return int(((~g["Score"].isna()) & (g["Date"] >= (date_ref - dt.timedelta(days=365)))).sum())
-
-    def av_12m(g):
-        if pd.isna(date_ref):
-            return np.nan
-        s = g.loc[(~g["Score"].isna()) & (g["Date"] >= (date_ref - dt.timedelta(days=365))), "Score"]
-        return float(s.mean()) if len(s) else np.nan
-
-    def hp_12m(g):
-        if pd.isna(date_ref):
-            return np.nan
-        s = g.loc[(~g["Score"].isna()) & (g["Date"] >= (date_ref - dt.timedelta(days=365))), "Score"]
-        return float(s.max()) if len(s) else np.nan
-
     def weighted_mean(vals, w):
         vals = np.array(vals, dtype=float)
         w = np.array(w, dtype=float)
@@ -373,17 +362,25 @@ def make_final_table(df: pd.DataFrame, date_ref: dt.date) -> pd.DataFrame:
     rows = []
     for (ath, dist), g in df.groupby(["Athlete", "Distance"], dropna=False):
         g = g.copy()
-        n12 = n_comp_12m(g)
 
+        g["is_12m"] = g["Date"].apply(lambda d: within_last_12_months(d, date_ref))
+        g_valid = g[g["is_12m"]].copy()
+
+        n12 = int((~g_valid["Score"].isna()).sum())
+
+        av12 = float(g_valid["Score"].mean()) if g_valid["Score"].notna().any() else np.nan
+        hp12 = float(g_valid["Score"].max()) if g_valid["Score"].notna().any() else np.nan
+
+        # Normal % = only valid competitions, weighted by competition coeff only
+        pctJ = weighted_mean(g_valid["%J"], g_valid["Coeff"])
+        pctS = weighted_mean(g_valid["%S"], g_valid["Coeff"])
+
+        # Compet % = all competitions, but old ones naturally go to zero via time coeff
         weights_time = g["Coeff"] * g["date_coeff"]
-
         pctJ_t = weighted_mean(g["%J"], weights_time)
         pctS_t = weighted_mean(g["%S"], weights_time)
 
-        pctJ = weighted_mean(g["%J"], weights_time)
-        pctS = weighted_mean(g["%S"], weights_time)
-
-        finale_avg = g["Finale_score"].dropna().mean() if g["Finale_score"].notna().any() else np.nan
+        finale_avg = g_valid["Finale_score"].dropna().mean() if g_valid["Finale_score"].notna().any() else np.nan
 
         row = {
             "Athlete": ath,
@@ -394,8 +391,8 @@ def make_final_table(df: pd.DataFrame, date_ref: dt.date) -> pd.DataFrame:
             "%S": pctS,
             "%S compet": pctS_t,
             "Finale S": finale_avg,
-            "Moyenne": av_12m(g),
-            "HP": hp_12m(g),
+            "Moyenne": av12,
+            "HP": hp12,
             "Nombre de compet": n12,
             "Sexe": g["Sexe"].dropna().iloc[0] if g["Sexe"].notna().any() else np.nan,
             "Catégorie": g["Category"].dropna().iloc[0] if g["Category"].notna().any() else np.nan,
@@ -440,7 +437,6 @@ def make_final_table(df: pd.DataFrame, date_ref: dt.date) -> pd.DataFrame:
 st.set_page_config(page_title="Ranking App", layout="wide")
 st.title("Ranking App (Excel → paramètres → tableau final)")
 
-# INITIALISATION DU SESSION STATE
 if "final_tbl" not in st.session_state:
     st.session_state["final_tbl"] = None
 if "df_clean" not in st.session_state:
@@ -536,19 +532,16 @@ if run:
         st.error("Il me faut un barème (point scale).")
         st.stop()
 
-    # Pre-processing Barème
     scale_df_c = scale_df.copy()
     scale_df_c["MinScore"] = pd.to_numeric(scale_df_c["MinScore"], errors="coerce")
     scale_df_c["Points"] = pd.to_numeric(scale_df_c["Points"], errors="coerce")
     scale_df_c = scale_df_c.dropna(subset=["ScaleKey", "MinScore", "Points"])
     scale_df_c = round_existing_columns(scale_df_c, ["MinScore", "Points"], 1)
 
-    # Final points map
     fp = final_points_df.copy()
     fp_map = dict(zip(pd.to_numeric(fp["Rank"]).astype(int), pd.to_numeric(fp["FinalPoints"]).astype(float)))
     fp = round_existing_columns(fp, ["Rank", "FinalPoints"], 1)
 
-    # Extraction et nettoyage
     df = extract_workbook(data_file.getvalue())
     df = df[df["Score"].fillna(0) > 0].copy()
     df = df[df["Score"].notna()].copy()
@@ -561,9 +554,9 @@ if run:
 
     df = add_date_coeff(df, date_ref_input)
 
-    # Calcul des performances
     df["ScaleKey_S"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], "S"), axis=1)
-    df["ScaleKey_J"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], "J"), axis=1)
+    df["ScaleKey_J"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], r["Category"]), axis=1)
+
     df["Perf_S"] = df.apply(lambda r: score_to_points(r["Score"], scale_df_c, r["ScaleKey_S"]), axis=1)
     df["Perf_J"] = df.apply(lambda r: score_to_points(r["Score"], scale_df_c, r["ScaleKey_J"]), axis=1)
     df["Finale_score"] = df["Rank"].apply(lambda x: fp_map.get(int(x), np.nan) if pd.notna(x) else np.nan)
@@ -584,13 +577,12 @@ if run:
 
     final_tbl = make_final_table(df, date_ref_input)
 
-    # SAUVEGARDE DANS LE SESSION STATE
     st.session_state["final_tbl"] = final_tbl
     st.session_state["df_clean"] = df
     st.session_state["scale_df_used"] = scale_df_c
     st.session_state["fp_df_used"] = fp
 
-# --- AFFICHAGE (Persistant) ---
+# --- DISPLAY ---
 if st.session_state["final_tbl"] is not None:
     df = st.session_state["df_clean"]
     final_tbl = st.session_state["final_tbl"]
@@ -602,11 +594,12 @@ if st.session_state["final_tbl"] is not None:
     with tab1:
         st.dataframe(df, use_container_width=True, height=520)
         st.subheader("Détail calcul %S compet / %J compet")
-        
+
         athlete_list = sorted(df["Athlete"].dropna().unique())
         athlete_debug = st.selectbox("Choisir une athlète", athlete_list, key="athlete_sel")
 
         debug_df = df[df["Athlete"] == athlete_debug].copy()
+        debug_df["is_12m"] = debug_df["Date"].apply(lambda d: within_last_12_months(d, date_ref_input))
         debug_df["Poids_%S_compet"] = debug_df["Coeff"] * debug_df["date_coeff"]
         debug_df["Contribution_%S_compet"] = debug_df["%S"] * debug_df["Poids_%S_compet"]
         debug_df["Poids_%J_compet"] = debug_df["Coeff"] * debug_df["date_coeff"]
@@ -622,7 +615,7 @@ if st.session_state["final_tbl"] is not None:
 
         st.dataframe(
             debug_df[[
-                "Athlete", "Distance", "Competition", "Date", "Score",
+                "Athlete", "Distance", "Competition", "Date", "is_12m", "Score",
                 "Perf_S", "Perf_J", "Finale_score", "%S", "%J",
                 "Coeff", "date_coeff",
                 "Poids_%S_compet", "Contribution_%S_compet",
@@ -665,12 +658,12 @@ if st.session_state["final_tbl"] is not None:
                 df.to_excel(writer, index=False, sheet_name="Clean_Long")
                 scale_df_used.to_excel(writer, index=False, sheet_name="Scale")
                 fp_used.to_excel(writer, index=False, sheet_name="FinalPoints")
-                
+
                 ws = writer.book["Final"]
                 red = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
                 orange = PatternFill(start_color="FFD580", end_color="FFD580", fill_type="solid")
                 green = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-                
+
                 headers = [c.value for c in ws[1]]
                 for name in ["%S", "%J"]:
                     if name in headers:
