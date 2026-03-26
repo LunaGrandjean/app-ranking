@@ -50,8 +50,8 @@ def round_existing_columns(df: pd.DataFrame, cols: list, decimals: int = 1) -> p
 def within_last_12_months(d, date_ref):
     if pd.isna(d) or pd.isna(date_ref):
         return False
-    return d >= (date_ref - dt.timedelta(days=365))
-
+    age_days = (date_ref - d).days
+    return 0 <= age_days < 365
 
 # =========================
 # 1) Extract workbook (raw FFTir Excel -> long df)
