@@ -266,7 +266,9 @@ def derive_sex_distance(df: pd.DataFrame) -> pd.DataFrame:
 def scale_key(distance: str, sexe: str, category: str) -> str:
     if pd.isna(distance) or pd.isna(sexe):
         return None
-    is_junior = (str(category).strip().upper() == "J")
+
+    cat = str(category).strip().upper()
+    is_junior = cat.startswith("J")
     women = (str(sexe).upper() == "F")
 
     if distance == "50m":
@@ -328,10 +330,9 @@ def add_date_coeff(df: pd.DataFrame, date_ref: dt.date) -> pd.DataFrame:
 # =========================
 # 8) Final table
 # =========================
-def make_final_table(df: pd.DataFrame) -> pd.DataFrame:
+def make_final_table(df: pd.DataFrame, date_ref: dt.date) -> pd.DataFrame:
     df = df.copy()
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.date
-    date_ref = df["Date"].dropna().max()
 
     def n_comp_12m(g):
         if pd.isna(date_ref):
@@ -366,10 +367,15 @@ def make_final_table(df: pd.DataFrame) -> pd.DataFrame:
         g = g.copy()
         n12 = n_comp_12m(g)
 
-        pctJ_t = weighted_mean(g["%J"], g["Coeff"] * g["date_coeff"])
-        pctS_t = weighted_mean(g["%S"], g["Coeff"] * g["date_coeff"])
-        pctJ = weighted_mean(g["%J"], g["Coeff"])
-        pctS = weighted_mean(g["%S"], g["Coeff"])
+        weights_time = g["Coeff"] * g["date_coeff"]
+
+        pctJ_t = weighted_mean(g["%J"], weights_time)
+        pctS_t = weighted_mean(g["%S"], weights_time)
+
+        # correction principale :
+        # les anciennes compétitions ne comptent plus non plus dans %J et %S
+        pctJ = weighted_mean(g["%J"], weights_time)
+        pctS = weighted_mean(g["%S"], weights_time)
 
         finale_avg = g["Finale_score"].dropna().mean() if g["Finale_score"].notna().any() else np.nan
 
@@ -549,7 +555,7 @@ if run:
     df["%S"] = (df["Total_Score_S"] / DENOM) * 100.0
 
     df = df[df["Distance"].notna()].copy()
-    final_tbl = make_final_table(df)
+    final_tbl = make_final_table(df, date_ref_input)
 
     # SAUVEGARDE DANS LE SESSION STATE
     st.session_state["final_tbl"] = final_tbl
