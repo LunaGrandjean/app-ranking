@@ -1,12 +1,12 @@
 import re
-from pathlib import Path
+import os
 from typing import Optional
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-import os
 
 st.set_page_config(page_title="Analyse CDF", layout="wide")
 
@@ -15,37 +15,34 @@ EXPECTED_COLS = [
     "score_finale", "mouches", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12",
     "P1", "P2", "P3", "P4", "P5", "Épreuve", "source_pdf"
 ]
+
 SERIES_COLS = [f"S{i}" for i in range(1, 13)]
 NUM_COLS = ["Rank", "Total", "score_finale"] + SERIES_COLS + [f"P{i}" for i in range(1, 6)]
 
-def load_csv_folder(path):
-    files = [f for f in os.listdir(path) if f.endswith(".csv")]
 
+@st.cache_data(show_spinner=False)
+def load_csv_folder(path: str) -> pd.DataFrame:
+    if not os.path.exists(path):
+        return pd.DataFrame()
+
+    files = sorted([f for f in os.listdir(path) if f.lower().endswith(".csv")])
     if not files:
-        return None
+        return pd.DataFrame()
 
     dfs = []
     for f in files:
         full_path = os.path.join(path, f)
-        df = pd.read_csv(full_path)
-        df["source_file"] = f
-        dfs.append(df)
+        try:
+            df = pd.read_csv(full_path)
+            df["source_file"] = f
+            dfs.append(df)
+        except Exception:
+            pass
+
+    if not dfs:
+        return pd.DataFrame()
 
     return pd.concat(dfs, ignore_index=True)
-
-# ---- UI ----
-path = "csv"
-
-if os.path.exists(path):
-    df = load_csv_folder(path)
-
-    if df is not None:
-        st.success(f"{len(df)} lignes chargées depuis {len(df['source_file'].unique())} fichiers")
-        st.dataframe(df.head())
-    else:
-        st.warning("Aucun CSV trouvé dans le dossier.")
-else:
-    st.error("Le dossier csv/ n'existe pas.")
 
 
 def normalize_athlete_name(name: str) -> str:
@@ -118,10 +115,11 @@ def prepare_data(raw: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def annual_stats(data: pd.DataFrame, discipline: str, sexe: str, score_col: str = "Total") -> pd.DataFrame:
+def annual_stats(data: pd.DataFrame, discipline: str, sexe: str, categorie_age: str, score_col: str = "Total") -> pd.DataFrame:
     sub = data[
         (data["discipline"] == discipline)
         & (data["sexe"] == sexe)
+        & (data["categorie_age"] == categorie_age)
     ].copy()
 
     sub = sub.dropna(subset=["Rank", score_col, "year"])
@@ -146,13 +144,7 @@ def annual_stats(data: pd.DataFrame, discipline: str, sexe: str, score_col: str 
 
 
 def plot_annual_scores(df: pd.DataFrame, discipline: str, sexe: str, categorie_age: str, score_col: str = "Total"):
-    dff = df[
-        (df["discipline"] == discipline)
-        & (df["sexe"] == sexe)
-        & (df["categorie_age"] == categorie_age)
-    ].copy()
-
-    stats = annual_stats(dff, discipline, sexe, score_col=score_col)
+    stats = annual_stats(df, discipline, sexe, categorie_age, score_col=score_col)
     if stats.empty:
         return None
 
@@ -214,19 +206,25 @@ def plot_annual_scores(df: pd.DataFrame, discipline: str, sexe: str, categorie_a
     return fig
 
 
-def plot_athlete_score(data: pd.DataFrame, athlete_name: str, discipline: str, sexe: Optional[str] = None):
+def plot_athlete_score(data: pd.DataFrame, athlete_name: str, discipline: str, sexe: Optional[str] = None, categorie_age: Optional[str] = None):
     athlete_norm = normalize_athlete_name(athlete_name)
     sub = data[(data["athlete"] == athlete_norm) & (data["discipline"] == discipline)].copy()
+
     if sexe is not None:
         sub = sub[sub["sexe"] == sexe]
+    if categorie_age is not None:
+        sub = sub[sub["categorie_age"] == categorie_age]
+
     if sub.empty:
         return None
 
     sub = sub.sort_values(["year", "categorie_age"])
+    y_col = "Total_normalise_6" if discipline == "10m" else "Total"
+
     fig = px.line(
         sub,
         x="year",
-        y="Total",
+        y=y_col,
         color="categorie_age",
         markers=True,
         hover_data=["Rank", "discipline", "sexe", "source_pdf"],
@@ -236,11 +234,15 @@ def plot_athlete_score(data: pd.DataFrame, athlete_name: str, discipline: str, s
     return fig
 
 
-def plot_athlete_rank(data: pd.DataFrame, athlete_name: str, discipline: str, sexe: Optional[str] = None):
+def plot_athlete_rank(data: pd.DataFrame, athlete_name: str, discipline: str, sexe: Optional[str] = None, categorie_age: Optional[str] = None):
     athlete_norm = normalize_athlete_name(athlete_name)
     sub = data[(data["athlete"] == athlete_norm) & (data["discipline"] == discipline)].copy()
+
     if sexe is not None:
         sub = sub[sub["sexe"] == sexe]
+    if categorie_age is not None:
+        sub = sub[sub["categorie_age"] == categorie_age]
+
     if sub.empty:
         return None
 
@@ -259,52 +261,32 @@ def plot_athlete_rank(data: pd.DataFrame, athlete_name: str, discipline: str, se
     return fig
 
 
-def athlete_summary(data: pd.DataFrame, athlete_name: str) -> pd.DataFrame:
+def athlete_summary(data: pd.DataFrame, athlete_name: str, sexe: Optional[str] = None, categorie_age: Optional[str] = None) -> pd.DataFrame:
     athlete_norm = normalize_athlete_name(athlete_name)
     sub = data[data["athlete"] == athlete_norm].copy()
+
+    if sexe is not None:
+        sub = sub[sub["sexe"] == sexe]
+    if categorie_age is not None:
+        sub = sub[sub["categorie_age"] == categorie_age]
+
     if sub.empty:
         return pd.DataFrame()
+
     return sub[["about", "year", "discipline", "sexe", "categorie_age", "Rank", "Total", "source_pdf"]].sort_values(["discipline", "year"])
 
 
-def top_athletes(data: pd.DataFrame, categorie_age: str, discipline: str, n: int = 15) -> pd.DataFrame:
-    sub = (
-        data[(data["categorie_age"] == categorie_age) & (data["discipline"] == discipline)]
-        .dropna(subset=["Rank"])
-        .sort_values(["Rank", "Total"], ascending=[True, False])
-        .drop_duplicates("athlete")
-        .head(n)
-    )
-    return sub[["athlete", "year", "Rank", "Total", "sexe", "source_pdf"]]
-
-
-st.title("Analyse CDF — version Streamlit")
-st.caption("Page 1 : analyse des CSV extraits du notebook CDF.ipynb")
-
-with st.sidebar:
-    st.header("Chargement des données")
-    source_mode = st.radio(
-        "Source des CSV",
-        ["Dossier local csv", "Upload manuel"],
-        index=0,
-    )
-
-    if source_mode == "Dossier local csv":
-        folder = st.text_input("Chemin du dossier CSV", value="csv")
-        raw = load_data_from_folder(folder)
-    else:
-        uploaded_files = st.file_uploader(
-            "Importer un ou plusieurs CSV",
-            type=["csv"],
-            accept_multiple_files=True,
-        )
-        raw = load_data_from_uploads(uploaded_files) if uploaded_files else pd.DataFrame()
-
-
+# =========================
+# Chargement auto uniquement
+# =========================
+raw = load_csv_folder("csv")
 df = prepare_data(raw) if not raw.empty else pd.DataFrame()
 
+st.title("Analyse CDF — version Streamlit")
+st.caption("Page 1 : analyse automatique des CSV du dossier csv/")
+
 if raw.empty:
-    st.info("Aucun fichier CSV chargé. Place tes fichiers dans un dossier `csv/` à côté du script, ou importe-les manuellement dans la barre latérale.")
+    st.error("Aucun fichier CSV trouvé dans le dossier 'csv/'.")
     st.stop()
 
 if df.empty:
@@ -317,84 +299,88 @@ col2.metric("Lignes analysables", len(df))
 col3.metric("Athlètes", df["athlete"].nunique())
 col4.metric("Années", int(df["year"].nunique()) if df["year"].notna().any() else 0)
 
-with st.expander("Aperçu des données préparées"):
-    st.dataframe(df.head(50), use_container_width=True)
+st.divider()
 
+# =========================
+# Filtres
+# =========================
+st.subheader("Filtres")
 
-tab1, tab2, tab3, tab4 = st.tabs([
-    "Scores annuels",
-    "Analyse athlète",
-    "Top athlètes",
-    "Données",
-])
+f1, f2, f3 = st.columns(3)
+selected_sexe = f1.selectbox("Sexe", sorted(df["sexe"].dropna().unique()))
+selected_cat = f2.selectbox("Catégorie", sorted(df["categorie_age"].dropna().unique()))
+selected_disc = f3.selectbox("Discipline", sorted(df["discipline"].dropna().unique()))
 
-with tab1:
-    st.subheader("Évolution annuelle des scores")
-    c1, c2, c3 = st.columns(3)
-    discipline = c1.selectbox("Discipline", sorted(df["discipline"].dropna().unique()), key="annual_discipline")
-    sexe = c2.selectbox("Sexe", sorted(df["sexe"].dropna().unique()), key="annual_sexe")
-    categorie = c3.selectbox("Catégorie", sorted(df["categorie_age"].dropna().unique()), key="annual_cat")
+filtered_df = df[
+    (df["sexe"] == selected_sexe)
+    & (df["categorie_age"] == selected_cat)
+    & (df["discipline"] == selected_disc)
+].copy()
 
-    score_col = "Total_normalise_6" if discipline == "10m" else "Total"
-    fig = plot_annual_scores(df, discipline, sexe, categorie, score_col=score_col)
-    if fig is None:
-        st.warning("Pas de données pour cette combinaison.")
+if filtered_df.empty:
+    st.warning("Aucune donnée pour cette combinaison.")
+    st.stop()
+
+score_col = "Total_normalise_6" if selected_disc == "10m" else "Total"
+
+st.subheader("Graphique global")
+fig_global = plot_annual_scores(df, selected_disc, selected_sexe, selected_cat, score_col=score_col)
+if fig_global is not None:
+    st.plotly_chart(fig_global, use_container_width=True)
+else:
+    st.warning("Pas de données pour ce graphique.")
+
+st.divider()
+
+st.subheader("Analyse athlète")
+athletes = sorted(filtered_df["athlete"].dropna().unique())
+selected_athlete = st.selectbox("Athlète", athletes)
+
+summary = athlete_summary(
+    df,
+    selected_athlete,
+    sexe=selected_sexe,
+    categorie_age=selected_cat
+)
+
+if not summary.empty:
+    st.dataframe(summary, use_container_width=True)
+
+score_fig = plot_athlete_score(
+    df,
+    selected_athlete,
+    selected_disc,
+    sexe=selected_sexe,
+    categorie_age=selected_cat
+)
+rank_fig = plot_athlete_rank(
+    df,
+    selected_athlete,
+    selected_disc,
+    sexe=selected_sexe,
+    categorie_age=selected_cat
+)
+
+c1, c2 = st.columns(2)
+with c1:
+    if score_fig is not None:
+        st.plotly_chart(score_fig, use_container_width=True)
     else:
-        st.plotly_chart(fig, use_container_width=True)
-
-with tab2:
-    st.subheader("Analyse par athlète")
-    athletes = sorted(df["athlete"].dropna().unique())
-    athlete = st.selectbox("Athlète", athletes)
-    sex_filter_options = ["Tous"] + sorted(df[df["athlete"] == athlete]["sexe"].dropna().unique().tolist())
-    sex_filter = st.selectbox("Filtre sexe", sex_filter_options)
-    sex_filter_value = None if sex_filter == "Tous" else sex_filter
-
-    summary = athlete_summary(df, athlete)
-    if sex_filter_value is not None and not summary.empty:
-        summary = summary[summary["sexe"] == sex_filter_value]
-
-    if summary.empty:
-        st.warning("Athlète non trouvé.")
+        st.info("Pas de graphique score pour cet athlète.")
+with c2:
+    if rank_fig is not None:
+        st.plotly_chart(rank_fig, use_container_width=True)
     else:
-        st.dataframe(summary, use_container_width=True)
-        available_disciplines = sorted(summary["discipline"].dropna().unique())
-        for disc in available_disciplines:
-            score_fig = plot_athlete_score(df, athlete, disc, sexe=sex_filter_value)
-            rank_fig = plot_athlete_rank(df, athlete, disc, sexe=sex_filter_value)
-            if score_fig is not None:
-                st.plotly_chart(score_fig, use_container_width=True)
-            if rank_fig is not None:
-                st.plotly_chart(rank_fig, use_container_width=True)
+        st.info("Pas de graphique rank pour cet athlète.")
 
-with tab3:
-    st.subheader("Top athlètes")
-    c1, c2, c3 = st.columns(3)
-    top_cat = c1.selectbox("Catégorie âge", sorted(df["categorie_age"].dropna().unique()), key="top_cat")
-    top_disc = c2.selectbox("Discipline", sorted(df["discipline"].dropna().unique()), key="top_disc")
-    top_n = c3.slider("Nombre d'athlètes", min_value=5, max_value=30, value=15)
+st.divider()
 
-    st.dataframe(top_athletes(df, top_cat, top_disc, top_n), use_container_width=True)
+with st.expander("Voir les données filtrées"):
+    st.dataframe(filtered_df, use_container_width=True)
 
-with tab4:
-    st.subheader("Exploration libre")
-    years = sorted([int(y) for y in df["year"].dropna().unique()])
-    selected_years = st.multiselect("Années", years, default=years)
-    selected_sexes = st.multiselect("Sexes", sorted(df["sexe"].dropna().unique()), default=sorted(df["sexe"].dropna().unique()))
-    selected_cats = st.multiselect("Catégories", sorted(df["categorie_age"].dropna().unique()), default=sorted(df["categorie_age"].dropna().unique()))
-    selected_disc = st.multiselect("Disciplines", sorted(df["discipline"].dropna().unique()), default=sorted(df["discipline"].dropna().unique()))
-
-    filtered = df[
-        df["year"].isin(selected_years)
-        & df["sexe"].isin(selected_sexes)
-        & df["categorie_age"].isin(selected_cats)
-        & df["discipline"].isin(selected_disc)
-    ].copy()
-
-    st.dataframe(filtered, use_container_width=True)
-    st.download_button(
-        "Télécharger les données filtrées en CSV",
-        data=filtered.to_csv(index=False).encode("utf-8"),
-        file_name="cdf_filtre.csv",
-        mime="text/csv",
-    )
+st.download_button(
+    "Télécharger les données filtrées en CSV",
+    data=filtered_df.to_csv(index=False).encode("utf-8"),
+    file_name="cdf_filtre.csv",
+    mime="text/csv",
+)
