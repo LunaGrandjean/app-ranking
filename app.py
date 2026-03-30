@@ -255,11 +255,11 @@ def score_to_points(score: float, scale_df: pd.DataFrame, key: str) -> float:
 
     min_threshold = sub["MinScore"].min()
 
-    if score <= min_threshold:
+    if score < min_threshold:
         return 0.0
 
     for _, row in sub.iterrows():
-        if score > row["MinScore"]:
+        if score >= row["MinScore"]:
             return float(row["Points"])
 
     return 0.0
