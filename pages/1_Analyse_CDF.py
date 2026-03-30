@@ -18,31 +18,34 @@ EXPECTED_COLS = [
 SERIES_COLS = [f"S{i}" for i in range(1, 13)]
 NUM_COLS = ["Rank", "Total", "score_finale"] + SERIES_COLS + [f"P{i}" for i in range(1, 6)]
 
+def load_csv_folder(path):
+    files = [f for f in os.listdir(path) if f.endswith(".csv")]
 
-@st.cache_data(show_spinner=False)
-def load_data_from_uploads(uploaded_files) -> pd.DataFrame:
+    if not files:
+        return None
+
     dfs = []
-    for f in uploaded_files:
-        df = pd.read_csv(f)
-        df["file_name"] = f.name
+    for f in files:
+        full_path = os.path.join(path, f)
+        df = pd.read_csv(full_path)
+        df["source_file"] = f
         dfs.append(df)
-    if not dfs:
-        return pd.DataFrame()
+
     return pd.concat(dfs, ignore_index=True)
 
+# ---- UI ----
+path = "csv"
 
-@st.cache_data(show_spinner=False)
-def load_data_from_folder(folder_path: str) -> pd.DataFrame:
-    data_dir = Path(folder_path)
-    csv_files = sorted(data_dir.glob("*.csv"))
-    dfs = []
-    for f in csv_files:
-        df = pd.read_csv(f)
-        df["file_name"] = f.name
-        dfs.append(df)
-    if not dfs:
-        return pd.DataFrame()
-    return pd.concat(dfs, ignore_index=True)
+if os.path.exists(path):
+    df = load_csv_folder(path)
+
+    if df is not None:
+        st.success(f"{len(df)} lignes chargées depuis {len(df['source_file'].unique())} fichiers")
+        st.dataframe(df.head())
+    else:
+        st.warning("Aucun CSV trouvé dans le dossier.")
+else:
+    st.error("Le dossier csv/ n'existe pas.")
 
 
 def normalize_athlete_name(name: str) -> str:
