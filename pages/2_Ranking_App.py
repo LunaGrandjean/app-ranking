@@ -12,6 +12,7 @@ st.set_page_config(page_title="Ranking App", layout="wide")
 
 EXCEL_ENGINE = "openpyxl"
 DENOM = 100.0
+AGE_CATEGORY_OPTIONS = ["U16", "U18", "U21", "S"]
 
 
 def excel_date_to_date(x):
@@ -52,6 +53,17 @@ def within_last_12_months(d, date_ref):
         return False
     age_days = (date_ref - d).days
     return 0 <= age_days < 365
+
+
+def default_age_category(category):
+    cat = str(category).strip().upper()
+    if cat == "S":
+        return "S"
+    if cat.startswith("J"):
+        return "U21"
+    if cat in AGE_CATEGORY_OPTIONS:
+        return cat
+    return "U21"
 
 
 def extract_sheet_long(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
@@ -309,7 +321,7 @@ def add_date_coeff(df: pd.DataFrame, date_ref: dt.date) -> pd.DataFrame:
 
         if age_days <= 122:
             return 1.0
-        if age_days > 365:
+        if age_days >= 365:
             return 0.0
 
         k = 3.0
@@ -336,7 +348,10 @@ def make_final_table(df: pd.DataFrame, date_ref: dt.date) -> pd.DataFrame:
         return float((vals[mask] * w[mask]).sum() / denom)
 
     rows = []
-    for (ath, dist, sexe, cat), g in df.groupby(["Athlete", "Distance", "Sexe", "Category"], dropna=False):
+    for (ath, dist, sexe, cat, age_cat), g in df.groupby(
+        ["Athlete", "Distance", "Sexe", "Category", "Age Category"],
+        dropna=False
+    ):
         g = g.copy()
 
         g["is_12m"] = g["Date"].apply(lambda d: within_last_12_months(d, date_ref))
@@ -369,6 +384,7 @@ def make_final_table(df: pd.DataFrame, date_ref: dt.date) -> pd.DataFrame:
             "Nombre de compet": n12,
             "Sexe": sexe,
             "Catégorie": cat,
+            "Age Category": age_cat,
         }
 
         if n12 < 5:
@@ -387,7 +403,7 @@ def make_final_table(df: pd.DataFrame, date_ref: dt.date) -> pd.DataFrame:
     ordered_cols = [
         "Athlete", "Distance", "%J", "%J compet", "Finale J",
         "%S", "%S compet", "Finale S", "Moyenne", "HP",
-        "Nombre de compet", "Sexe", "Catégorie",
+        "Nombre de compet", "Sexe", "Catégorie", "Age Category",
     ]
 
     final_tbl = final_tbl[ordered_cols]
@@ -493,6 +509,50 @@ remove_text = st.text_area(
 )
 athletes_to_remove = [x.strip() for x in remove_text.splitlines() if x.strip()]
 
+st.divider()
+
+st.subheader("Age Category")
+st.caption("This does not replace the J/S category used for the calculation. It only adds U16 / U18 / U21 / S to the final output.")
+
+age_map_df = pd.DataFrame(columns=["Athlete", "Sexe", "Catégorie", "Age Category"])
+
+if data_file is not None:
+    try:
+        preview_df = extract_workbook(data_file.getvalue())
+        preview_df = preview_df[preview_df["Score"].fillna(0) > 0].copy()
+        preview_df = derive_sex_distance(preview_df)
+        preview_df = fix_names(preview_df)
+
+        if athletes_to_remove:
+            preview_df = preview_df[~preview_df["Athlete"].isin(athletes_to_remove)].copy()
+
+        age_map_df = (
+            preview_df[["Athlete", "Sexe", "Category"]]
+            .drop_duplicates()
+            .sort_values(["Sexe", "Category", "Athlete"])
+            .rename(columns={"Category": "Catégorie"})
+            .reset_index(drop=True)
+        )
+        age_map_df["Age Category"] = age_map_df["Catégorie"].apply(default_age_category)
+
+        age_map_df = st.data_editor(
+            age_map_df,
+            num_rows="fixed",
+            use_container_width=True,
+            key="editor_age_category",
+            column_config={
+                "Age Category": st.column_config.SelectboxColumn(
+                    "Age Category",
+                    options=AGE_CATEGORY_OPTIONS,
+                    required=True,
+                )
+            },
+        )
+    except Exception as e:
+        st.warning(f"Could not prepare Age Category mapping: {e}")
+else:
+    st.info("Upload the results file to edit Age Category mapping.")
+
 run = st.button("Calculer le tableau final", type="primary")
 
 if run:
@@ -521,6 +581,17 @@ if run:
 
     if athletes_to_remove:
         df = df[~df["Athlete"].isin(athletes_to_remove)].copy()
+
+    age_map_clean = age_map_df.copy()
+    age_map_clean = age_map_clean.rename(columns={"Catégorie": "Category"})
+    age_map_clean = age_map_clean[["Athlete", "Sexe", "Category", "Age Category"]].drop_duplicates()
+
+    df = df.merge(
+        age_map_clean,
+        on=["Athlete", "Sexe", "Category"],
+        how="left",
+    )
+    df["Age Category"] = df["Age Category"].fillna(df["Category"].apply(default_age_category))
 
     df = add_date_coeff(df, date_ref_input)
 
@@ -581,7 +652,7 @@ if st.session_state["final_tbl"] is not None:
             debug_df[[
                 "Athlete", "Distance", "Competition", "Date", "is_12m", "Score",
                 "Perf_S", "Perf_J", "Finale_score", "%S", "%J",
-                "Coeff", "date_coeff",
+                "Coeff", "date_coeff", "Age Category",
                 "Poids_%S_compet", "Contribution_%S_compet",
                 "Poids_%J_compet", "Contribution_%J_compet",
             ]],
@@ -634,9 +705,9 @@ if st.session_state["final_tbl"] is not None:
                     if name in headers:
                         col_letter = ws.cell(row=1, column=headers.index(name) + 1).column_letter
                         cell_range = f"{col_letter}2:{col_letter}{ws.max_row}"
-                        ws.conditional_formatting.add(cell_range, CellIsRule(operator='lessThan', formula=['30'], fill=red))
-                        ws.conditional_formatting.add(cell_range, CellIsRule(operator='between', formula=['30', '70'], fill=orange))
-                        ws.conditional_formatting.add(cell_range, CellIsRule(operator='greaterThan', formula=['70'], fill=green))
+                        ws.conditional_formatting.add(cell_range, CellIsRule(operator="lessThan", formula=["30"], fill=red))
+                        ws.conditional_formatting.add(cell_range, CellIsRule(operator="between", formula=["30", "70"], fill=orange))
+                        ws.conditional_formatting.add(cell_range, CellIsRule(operator="greaterThan", formula=["70"], fill=green))
 
             st.download_button(
                 "Télécharger XLSX",
