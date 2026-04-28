@@ -20,18 +20,18 @@ SERIES_COLS = [f"S{i}" for i in range(1, 13)]
 NUM_COLS = ["Rank", "Total", "score_finale"] + SERIES_COLS + [f"P{i}" for i in range(1, 6)]
 
 ATHLETES_SUIVIS = [
-    "Oceanne MULLER",
-    "Lucas KRYZS",
-    "Dimitri DUTENDAS",
-    "Brian BAUDOUIN",
-    "Agathe GIRARD",
-    "Manon HERBULOT",
-    "Julia Canestrelli",
-    "Judith Gomez",
-    "Romain Aufrère",
-    "Jade Bordet",
-    "Jérémy Monier",
-    "Michael D’halluin",
+    "MULLER Océanne",
+    "KRYZS Lucas",
+    "DUTENDAS Dimitri",
+    "BAUDOUIN Brian",
+    "GIRARD Agathe",
+    "HERBULOT Manon",
+    "CANESTRELLI Julia",
+    "GOMEZ Judith",
+    "AUFRERE Romain",
+    "BORDET Jade",
+    "MONIER Jérémy",
+    "D'HALLUIN Michael",
 ]
 
 
