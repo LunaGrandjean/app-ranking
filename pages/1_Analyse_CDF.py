@@ -19,6 +19,21 @@ EXPECTED_COLS = [
 SERIES_COLS = [f"S{i}" for i in range(1, 13)]
 NUM_COLS = ["Rank", "Total", "score_finale"] + SERIES_COLS + [f"P{i}" for i in range(1, 6)]
 
+ATHLETES_SUIVIS = [
+    "Oceanne MULLER",
+    "Lucas KRYZS",
+    "Dimitri DUTENDAS",
+    "Brian BAUDOUIN",
+    "Agathe GIRARD",
+    "Manon HERBULOT",
+    "Julia Canestrelli",
+    "Judith Gomez",
+    "Romain Aufrère",
+    "Jade Bordet",
+    "Jérémy Monier",
+    "Michael D’halluin",
+]
+
 
 @st.cache_data(show_spinner=False)
 def load_csv_folder(path: str) -> pd.DataFrame:
@@ -94,6 +109,7 @@ def prepare_data(raw: pd.DataFrame) -> pd.DataFrame:
     df["year"] = df["date"].dt.year
 
     df[["discipline", "sexe", "categorie_age"]] = df["source_pdf"].apply(parse_event_info)
+
     df["nb_series"] = df[SERIES_COLS].notna().sum(axis=1)
     df["Total_normalise_6"] = df["Total"]
 
@@ -115,7 +131,13 @@ def prepare_data(raw: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def annual_stats(data: pd.DataFrame, discipline: str, sexe: str, categorie_age: str, score_col: str = "Total") -> pd.DataFrame:
+def annual_stats(
+    data: pd.DataFrame,
+    discipline: str,
+    sexe: str,
+    categorie_age: str,
+    score_col: str = "Total"
+) -> pd.DataFrame:
     sub = data[
         (data["discipline"] == discipline)
         & (data["sexe"] == sexe)
@@ -130,72 +152,69 @@ def annual_stats(data: pd.DataFrame, discipline: str, sexe: str, categorie_age: 
     out = []
     for year, g in sub.groupby("year"):
         g = g.sort_values("Rank")
-        out.append(
-            {
-                "year": year,
-                "first_score": g.loc[g["Rank"] == 1, score_col].mean(),
-                "podium_mean": g[g["Rank"] <= 3][score_col].mean(),
-                "top10_mean": g[g["Rank"] <= 10][score_col].mean(),
-                "rank10_score": g.loc[g["Rank"] == 10, score_col].mean(),
-            }
-        )
+        out.append({
+            "year": year,
+            "first_score": g.loc[g["Rank"] == 1, score_col].mean(),
+            "podium_mean": g[g["Rank"] <= 3][score_col].mean(),
+            "top10_mean": g[g["Rank"] <= 10][score_col].mean(),
+            "rank10_score": g.loc[g["Rank"] == 10, score_col].mean(),
+        })
 
     return pd.DataFrame(out).sort_values("year") if out else pd.DataFrame()
 
 
-def plot_annual_scores(df: pd.DataFrame, discipline: str, sexe: str, categorie_age: str, score_col: str = "Total"):
+def plot_annual_scores(
+    df: pd.DataFrame,
+    discipline: str,
+    sexe: str,
+    categorie_age: str,
+    score_col: str = "Total"
+):
     stats = annual_stats(df, discipline, sexe, categorie_age, score_col=score_col)
+
     if stats.empty:
         return None
 
     fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=stats["year"],
-            y=stats["rank10_score"],
-            mode="lines",
-            line=dict(width=0),
-            showlegend=False,
-            hoverinfo="skip",
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=stats["year"],
-            y=stats["first_score"],
-            mode="lines",
-            fill="tonexty",
-            name="Couloir 1er-10e",
-            hovertemplate="Année=%{x}<br>1er=%{y:.2f}<extra></extra>",
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=stats["year"],
-            y=stats["first_score"],
-            mode="lines+markers",
-            name="1er",
-            hovertemplate="Année=%{x}<br>1er=%{y:.2f}<extra></extra>",
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=stats["year"],
-            y=stats["podium_mean"],
-            mode="lines+markers",
-            name="Moyenne podium",
-            hovertemplate="Année=%{x}<br>Podium=%{y:.2f}<extra></extra>",
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=stats["year"],
-            y=stats["top10_mean"],
-            mode="lines+markers",
-            name="Moyenne top 10",
-            hovertemplate="Année=%{x}<br>Top10=%{y:.2f}<extra></extra>",
-        )
-    )
+
+    fig.add_trace(go.Scatter(
+        x=stats["year"],
+        y=stats["rank10_score"],
+        mode="lines",
+        line=dict(width=0),
+        showlegend=False,
+        hoverinfo="skip",
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=stats["year"],
+        y=stats["first_score"],
+        mode="lines",
+        fill="tonexty",
+        name="Couloir 1er-10e",
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=stats["year"],
+        y=stats["first_score"],
+        mode="lines+markers",
+        name="1er",
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=stats["year"],
+        y=stats["podium_mean"],
+        mode="lines+markers",
+        name="Moyenne podium",
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=stats["year"],
+        y=stats["top10_mean"],
+        mode="lines+markers",
+        name="Moyenne top 10",
+    ))
+
     fig.update_layout(
         title=f"Évolution annuelle des scores — {discipline} / {sexe} / {categorie_age}",
         xaxis_title="Année",
@@ -203,15 +222,142 @@ def plot_annual_scores(df: pd.DataFrame, discipline: str, sexe: str, categorie_a
         template="plotly_white",
         hovermode="x unified",
     )
+
     return fig
 
 
-def plot_athlete_score(data: pd.DataFrame, athlete_name: str, discipline: str, sexe: Optional[str] = None, categorie_age: Optional[str] = None):
+def plot_athlete_vs_category_by_year(
+    data: pd.DataFrame,
+    athlete_name: str,
+    discipline: str,
+    score_col: str = "Total",
+):
     athlete_norm = normalize_athlete_name(athlete_name)
-    sub = data[(data["athlete"] == athlete_norm) & (data["discipline"] == discipline)].copy()
+
+    athlete_rows = data[
+        (data["athlete"] == athlete_norm)
+        & (data["discipline"] == discipline)
+        & (data["year"].between(2016, 2026))
+    ].copy()
+
+    if athlete_rows.empty:
+        return None, pd.DataFrame()
+
+    athlete_rows = athlete_rows.sort_values("year")
+
+    rows = []
+
+    for _, athlete_row in athlete_rows.iterrows():
+        year = athlete_row["year"]
+        sexe = athlete_row["sexe"]
+        categorie = athlete_row["categorie_age"]
+
+        same_context = data[
+            (data["year"] == year)
+            & (data["discipline"] == discipline)
+            & (data["sexe"] == sexe)
+            & (data["categorie_age"] == categorie)
+        ].copy()
+
+        same_context = same_context.dropna(subset=["Rank", score_col])
+        same_context["Rank"] = same_context["Rank"].astype(int)
+
+        rows.append({
+            "year": year,
+            "athlete_score": athlete_row[score_col],
+            "athlete_rank": athlete_row["Rank"],
+            "categorie_age": categorie,
+            "sexe": sexe,
+            "first_score": same_context.loc[same_context["Rank"] == 1, score_col].mean(),
+            "podium_mean": same_context.loc[same_context["Rank"] <= 3, score_col].mean(),
+            "top10_mean": same_context.loc[same_context["Rank"] <= 10, score_col].mean(),
+            "rank10_score": same_context.loc[same_context["Rank"] == 10, score_col].mean(),
+        })
+
+    stats = pd.DataFrame(rows).sort_values("year")
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=stats["year"],
+        y=stats["rank10_score"],
+        mode="lines",
+        line=dict(width=0),
+        showlegend=False,
+        hoverinfo="skip",
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=stats["year"],
+        y=stats["first_score"],
+        mode="lines",
+        fill="tonexty",
+        name="Couloir 1er-10e catégorie réelle",
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=stats["year"],
+        y=stats["first_score"],
+        mode="lines+markers",
+        name="1er catégorie",
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=stats["year"],
+        y=stats["podium_mean"],
+        mode="lines+markers",
+        name="Moyenne podium catégorie",
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=stats["year"],
+        y=stats["top10_mean"],
+        mode="lines+markers",
+        name="Moyenne top 10 catégorie",
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=stats["year"],
+        y=stats["athlete_score"],
+        mode="lines+markers+text",
+        name=athlete_name,
+        text=stats["categorie_age"],
+        textposition="top center",
+        hovertemplate=(
+            "Année=%{x}<br>"
+            "Score=%{y:.2f}<br>"
+            "Catégorie=%{text}<extra></extra>"
+        ),
+    ))
+
+    fig.update_layout(
+        title=f"Évolution 2016-2026 — {athlete_name} vs sa catégorie réelle",
+        xaxis_title="Année",
+        yaxis_title="Score",
+        template="plotly_white",
+        hovermode="x unified",
+    )
+
+    return fig, stats
+
+
+def plot_athlete_score(
+    data: pd.DataFrame,
+    athlete_name: str,
+    discipline: str,
+    sexe: Optional[str] = None,
+    categorie_age: Optional[str] = None
+):
+    athlete_norm = normalize_athlete_name(athlete_name)
+
+    sub = data[
+        (data["athlete"] == athlete_norm)
+        & (data["discipline"] == discipline)
+    ].copy()
 
     if sexe is not None:
         sub = sub[sub["sexe"] == sexe]
+
     if categorie_age is not None:
         sub = sub[sub["categorie_age"] == categorie_age]
 
@@ -230,16 +376,33 @@ def plot_athlete_score(data: pd.DataFrame, athlete_name: str, discipline: str, s
         hover_data=["Rank", "discipline", "sexe", "source_pdf"],
         title=f"Évolution du score — {athlete_name} ({discipline})",
     )
-    fig.update_layout(template="plotly_white", xaxis_title="Année", yaxis_title="Score")
+
+    fig.update_layout(
+        template="plotly_white",
+        xaxis_title="Année",
+        yaxis_title="Score"
+    )
+
     return fig
 
 
-def plot_athlete_rank(data: pd.DataFrame, athlete_name: str, discipline: str, sexe: Optional[str] = None, categorie_age: Optional[str] = None):
+def plot_athlete_rank(
+    data: pd.DataFrame,
+    athlete_name: str,
+    discipline: str,
+    sexe: Optional[str] = None,
+    categorie_age: Optional[str] = None
+):
     athlete_norm = normalize_athlete_name(athlete_name)
-    sub = data[(data["athlete"] == athlete_norm) & (data["discipline"] == discipline)].copy()
+
+    sub = data[
+        (data["athlete"] == athlete_norm)
+        & (data["discipline"] == discipline)
+    ].copy()
 
     if sexe is not None:
         sub = sub[sub["sexe"] == sexe]
+
     if categorie_age is not None:
         sub = sub[sub["categorie_age"] == categorie_age]
 
@@ -247,6 +410,7 @@ def plot_athlete_rank(data: pd.DataFrame, athlete_name: str, discipline: str, se
         return None
 
     sub = sub.sort_values(["year", "categorie_age"])
+
     fig = px.line(
         sub,
         x="year",
@@ -256,29 +420,46 @@ def plot_athlete_rank(data: pd.DataFrame, athlete_name: str, discipline: str, se
         hover_data=["Total", "discipline", "sexe", "source_pdf"],
         title=f"Évolution du rank — {athlete_name} ({discipline})",
     )
-    fig.update_layout(template="plotly_white", xaxis_title="Année", yaxis_title="Rank")
+
+    fig.update_layout(
+        template="plotly_white",
+        xaxis_title="Année",
+        yaxis_title="Rank"
+    )
+
     fig.update_yaxes(autorange="reversed")
+
     return fig
 
 
-def athlete_summary(data: pd.DataFrame, athlete_name: str, sexe: Optional[str] = None, categorie_age: Optional[str] = None) -> pd.DataFrame:
+def athlete_summary(
+    data: pd.DataFrame,
+    athlete_name: str,
+    sexe: Optional[str] = None,
+    categorie_age: Optional[str] = None
+) -> pd.DataFrame:
     athlete_norm = normalize_athlete_name(athlete_name)
+
     sub = data[data["athlete"] == athlete_norm].copy()
 
     if sexe is not None:
         sub = sub[sub["sexe"] == sexe]
+
     if categorie_age is not None:
         sub = sub[sub["categorie_age"] == categorie_age]
 
     if sub.empty:
         return pd.DataFrame()
 
-    return sub[["about", "year", "discipline", "sexe", "categorie_age", "Rank", "Total", "source_pdf"]].sort_values(["discipline", "year"])
+    return sub[
+        ["about", "year", "discipline", "sexe", "categorie_age", "Rank", "Total", "source_pdf"]
+    ].sort_values(["discipline", "year"])
 
 
 # =========================
 # Chargement auto uniquement
 # =========================
+
 raw = load_csv_folder("csv")
 df = prepare_data(raw) if not raw.empty else pd.DataFrame()
 
@@ -304,12 +485,25 @@ st.divider()
 # =========================
 # Filtres
 # =========================
+
 st.subheader("Filtres")
 
 f1, f2, f3 = st.columns(3)
-selected_sexe = f1.selectbox("Sexe", sorted(df["sexe"].dropna().unique()))
-selected_cat = f2.selectbox("Catégorie", sorted(df["categorie_age"].dropna().unique()))
-selected_disc = f3.selectbox("Discipline", sorted(df["discipline"].dropna().unique()))
+
+selected_sexe = f1.selectbox(
+    "Sexe",
+    sorted(df["sexe"].dropna().unique())
+)
+
+selected_cat = f2.selectbox(
+    "Catégorie",
+    sorted(df["categorie_age"].dropna().unique())
+)
+
+selected_disc = f3.selectbox(
+    "Discipline",
+    sorted(df["discipline"].dropna().unique())
+)
 
 filtered_df = df[
     (df["sexe"] == selected_sexe)
@@ -323,8 +517,20 @@ if filtered_df.empty:
 
 score_col = "Total_normalise_6" if selected_disc == "10m" else "Total"
 
+# =========================
+# Graphique global
+# =========================
+
 st.subheader("Graphique global")
-fig_global = plot_annual_scores(df, selected_disc, selected_sexe, selected_cat, score_col=score_col)
+
+fig_global = plot_annual_scores(
+    df,
+    selected_disc,
+    selected_sexe,
+    selected_cat,
+    score_col=score_col
+)
+
 if fig_global is not None:
     st.plotly_chart(fig_global, use_container_width=True)
 else:
@@ -332,13 +538,54 @@ else:
 
 st.divider()
 
-st.subheader("Analyse athlète")
+# =========================
+# Analyse athlète suivie
+# =========================
+
+st.subheader("Analyse athlète suivi 2016-2026")
+
+selected_athlete = st.selectbox(
+    "Choisir un athlète",
+    ATHLETES_SUIVIS
+)
+
+fig_athlete_context, athlete_context_stats = plot_athlete_vs_category_by_year(
+    df,
+    selected_athlete,
+    selected_disc,
+    score_col=score_col
+)
+
+if fig_athlete_context is not None:
+    st.plotly_chart(fig_athlete_context, use_container_width=True)
+
+    st.caption(
+        "Les lignes 1er / podium / top 10 sont calculées chaque année dans la même catégorie que l’athlète sélectionné."
+    )
+
+    st.dataframe(athlete_context_stats, use_container_width=True)
+else:
+    st.warning(
+        f"Aucune donnée trouvée pour {selected_athlete} en {selected_disc} entre 2016 et 2026."
+    )
+
+st.divider()
+
+# =========================
+# Analyse athlète classique
+# =========================
+
+st.subheader("Analyse athlète classique")
+
 athletes = sorted(filtered_df["athlete"].dropna().unique())
-selected_athlete = st.selectbox("Athlète", athletes)
+selected_athlete_classic = st.selectbox(
+    "Athlète dans les données filtrées",
+    athletes
+)
 
 summary = athlete_summary(
     df,
-    selected_athlete,
+    selected_athlete_classic,
     sexe=selected_sexe,
     categorie_age=selected_cat
 )
@@ -348,25 +595,28 @@ if not summary.empty:
 
 score_fig = plot_athlete_score(
     df,
-    selected_athlete,
+    selected_athlete_classic,
     selected_disc,
     sexe=selected_sexe,
     categorie_age=selected_cat
 )
+
 rank_fig = plot_athlete_rank(
     df,
-    selected_athlete,
+    selected_athlete_classic,
     selected_disc,
     sexe=selected_sexe,
     categorie_age=selected_cat
 )
 
 c1, c2 = st.columns(2)
+
 with c1:
     if score_fig is not None:
         st.plotly_chart(score_fig, use_container_width=True)
     else:
         st.info("Pas de graphique score pour cet athlète.")
+
 with c2:
     if rank_fig is not None:
         st.plotly_chart(rank_fig, use_container_width=True)
@@ -374,6 +624,10 @@ with c2:
         st.info("Pas de graphique rank pour cet athlète.")
 
 st.divider()
+
+# =========================
+# Données filtrées
+# =========================
 
 with st.expander("Voir les données filtrées"):
     st.dataframe(filtered_df, use_container_width=True)
