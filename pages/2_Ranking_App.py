@@ -12,7 +12,6 @@ st.set_page_config(page_title="Ranking App", layout="wide")
 
 EXCEL_ENGINE = "openpyxl"
 DENOM = 100.0
-AGE_CATEGORY_OPTIONS = ["U16", "U18", "U21", "S"]
 
 
 def excel_date_to_date(x):
@@ -61,24 +60,31 @@ def default_age_category(category):
         return "S"
     if cat.startswith("J"):
         return "U21"
-    if cat in AGE_CATEGORY_OPTIONS:
+    if cat in ["U16", "U18", "U21"]:
         return cat
-    return "U21"
+    return np.nan
 
 
 def extract_sheet_long(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
     raw = raw.copy()
 
     header_row = None
+    cat_col = None
+    name_col = None
+
     for r in range(min(40, raw.shape[0])):
-        c0 = squish(raw.iat[r, 0]).lower()
-        c1 = squish(raw.iat[r, 1]).lower()
-        if c0 == "cat" and c1 == "name":
+        values = [squish(raw.iat[r, c]).lower() for c in range(raw.shape[1])]
+        if "cat" in values and "name" in values:
             header_row = r
+            cat_col = values.index("cat")
+            name_col = values.index("name")
             break
 
     if header_row is None:
-        return pd.DataFrame(columns=["Athlete", "Category", "Competition", "Date", "Score", "Rank", "Sheet"])
+        return pd.DataFrame(columns=[
+            "Athlete", "Category", "Age Category", "Competition",
+            "Date", "Score", "Rank", "Sheet"
+        ])
 
     athlete_start_row = header_row + 1
     comp_row = max(0, header_row - 2)
@@ -89,13 +95,25 @@ def extract_sheet_long(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
             score_cols.append(c)
 
     if not score_cols:
-        return pd.DataFrame(columns=["Athlete", "Category", "Competition", "Date", "Score", "Rank", "Sheet"])
+        return pd.DataFrame(columns=[
+            "Athlete", "Category", "Age Category", "Competition",
+            "Date", "Score", "Rank", "Sheet"
+        ])
 
     first_comp_col = score_cols[0]
     step = (score_cols[1] - score_cols[0]) if len(score_cols) >= 2 else 3
 
-    athletes = raw.iloc[athlete_start_row:, 1].apply(squish).replace({"": np.nan})
-    categories = raw.iloc[athlete_start_row:, 0].apply(squish).replace({"": np.nan})
+    athletes = raw.iloc[athlete_start_row:, name_col].apply(squish).replace({"": np.nan})
+    categories = raw.iloc[athlete_start_row:, cat_col].apply(squish).replace({"": np.nan})
+
+    # New logic: the age category column is usually between Cat and Name.
+    # In the new file, it is the column just before Name.
+    age_col = name_col - 1 if name_col - 1 > cat_col else None
+
+    if age_col is not None:
+        age_categories = raw.iloc[athlete_start_row:, age_col].apply(squish).replace({"": np.nan})
+    else:
+        age_categories = categories.apply(default_age_category)
 
     parts = []
     for col in range(first_comp_col, raw.shape[1] - 1, step):
@@ -112,6 +130,7 @@ def extract_sheet_long(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
         df_part = pd.DataFrame({
             "Athlete": athletes,
             "Category": categories,
+            "Age Category": age_categories,
             "Competition": comp_name,
             "Date": comp_date,
             "Score": score,
@@ -124,7 +143,10 @@ def extract_sheet_long(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
         parts.append(df_part)
 
     if not parts:
-        return pd.DataFrame(columns=["Athlete", "Category", "Competition", "Date", "Score", "Rank", "Sheet"])
+        return pd.DataFrame(columns=[
+            "Athlete", "Category", "Age Category", "Competition",
+            "Date", "Score", "Rank", "Sheet"
+        ])
 
     return pd.concat(parts, ignore_index=True)
 
@@ -147,8 +169,19 @@ def extract_workbook(file_bytes: bytes) -> pd.DataFrame:
             pass
 
     if not dfs:
-        return pd.DataFrame(columns=["Athlete", "Category", "Competition", "Date", "Score", "Rank", "Sheet"])
-    return pd.concat(dfs, ignore_index=True)
+        return pd.DataFrame(columns=[
+            "Athlete", "Category", "Age Category", "Competition",
+            "Date", "Score", "Rank", "Sheet"
+        ])
+
+    df = pd.concat(dfs, ignore_index=True)
+
+    if "Age Category" not in df.columns:
+        df["Age Category"] = df["Category"].apply(default_age_category)
+    else:
+        df["Age Category"] = df["Age Category"].fillna(df["Category"].apply(default_age_category))
+
+    return df
 
 
 def add_comp_coeff(df: pd.DataFrame, coeff_table: pd.DataFrame) -> pd.DataFrame:
@@ -509,50 +542,6 @@ remove_text = st.text_area(
 )
 athletes_to_remove = [x.strip() for x in remove_text.splitlines() if x.strip()]
 
-st.divider()
-
-st.subheader("Age Category")
-st.caption("This does not replace the J/S category used for the calculation. It only adds U16 / U18 / U21 / S to the final output.")
-
-age_map_df = pd.DataFrame(columns=["Athlete", "Sexe", "Catégorie", "Age Category"])
-
-if data_file is not None:
-    try:
-        preview_df = extract_workbook(data_file.getvalue())
-        preview_df = preview_df[preview_df["Score"].fillna(0) > 0].copy()
-        preview_df = derive_sex_distance(preview_df)
-        preview_df = fix_names(preview_df)
-
-        if athletes_to_remove:
-            preview_df = preview_df[~preview_df["Athlete"].isin(athletes_to_remove)].copy()
-
-        age_map_df = (
-            preview_df[["Athlete", "Sexe", "Category"]]
-            .drop_duplicates()
-            .sort_values(["Sexe", "Category", "Athlete"])
-            .rename(columns={"Category": "Catégorie"})
-            .reset_index(drop=True)
-        )
-        age_map_df["Age Category"] = age_map_df["Catégorie"].apply(default_age_category)
-
-        age_map_df = st.data_editor(
-            age_map_df,
-            num_rows="fixed",
-            use_container_width=True,
-            key="editor_age_category",
-            column_config={
-                "Age Category": st.column_config.SelectboxColumn(
-                    "Age Category",
-                    options=AGE_CATEGORY_OPTIONS,
-                    required=True,
-                )
-            },
-        )
-    except Exception as e:
-        st.warning(f"Could not prepare Age Category mapping: {e}")
-else:
-    st.info("Upload the results file to edit Age Category mapping.")
-
 run = st.button("Calculer le tableau final", type="primary")
 
 if run:
@@ -582,15 +571,6 @@ if run:
     if athletes_to_remove:
         df = df[~df["Athlete"].isin(athletes_to_remove)].copy()
 
-    age_map_clean = age_map_df.copy()
-    age_map_clean = age_map_clean.rename(columns={"Catégorie": "Category"})
-    age_map_clean = age_map_clean[["Athlete", "Sexe", "Category", "Age Category"]].drop_duplicates()
-
-    df = df.merge(
-        age_map_clean,
-        on=["Athlete", "Sexe", "Category"],
-        how="left",
-    )
     df["Age Category"] = df["Age Category"].fillna(df["Category"].apply(default_age_category))
 
     df = add_date_coeff(df, date_ref_input)
