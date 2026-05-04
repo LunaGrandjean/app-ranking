@@ -123,7 +123,7 @@ def prepare_data(raw: pd.DataFrame) -> pd.DataFrame:
         df.loc[mask_10m, "Total"] * 6 / df.loc[mask_10m, "nb_series"]
     )
 
-    # 50m CDF uniquement : si score > 900, on divise par 2
+    # 50m CDF uniquement : anciens formats > 900 divisés par 2
     mask_50m_cdf_old = (df["discipline"] == "50m") & (df["Total"] > 900)
     df.loc[mask_50m_cdf_old, "Total_normalise"] = (
         df.loc[mask_50m_cdf_old, "Total"] / 2
@@ -167,6 +167,10 @@ def load_world_data(path: str) -> pd.DataFrame:
 
     event_col = df["event"].astype(str)
 
+    # IMPORTANT : on garde seulement les épreuves Rifle / Carabine
+    df = df[event_col.str.contains("Rifle", case=False, na=False)].copy()
+    event_col = df["event"].astype(str)
+
     df["discipline"] = np.where(
         event_col.str.contains("10m", case=False, na=False),
         "10m",
@@ -190,7 +194,7 @@ def load_world_data(path: str) -> pd.DataFrame:
     df["categorie_age"] = "Senior"
     df["competition_level"] = "World Cup"
 
-    # IMPORTANT : World Cup jamais normalisé
+    # IMPORTANT : World Cup non normalisé
     df["Total_normalise"] = df["Total"]
 
     df = df[
@@ -220,24 +224,22 @@ def annual_stats(
         & (data["categorie_age"] == categorie_age)
     ].copy()
 
-    sub = sub.dropna(subset=[score_col, "year", "competition"])
-    sub = sub[sub[score_col] > 0]
+    sub = sub.dropna(subset=["Rank", score_col, "year", "competition"])
+    sub["Rank"] = pd.to_numeric(sub["Rank"], errors="coerce")
+    sub = sub.dropna(subset=["Rank"])
+    sub["Rank"] = sub["Rank"].astype(int)
 
     rows = []
-    group_cols = ["year", "competition", "Épreuve"]
 
-    for keys, g in sub.groupby(group_cols, dropna=False):
+    for keys, g in sub.groupby(["year", "competition", "Épreuve"], dropna=False):
         year = keys[0]
-
-        # On trie par score décroissant, pas par rank final
-        g = g.sort_values(score_col, ascending=False).reset_index(drop=True)
 
         rows.append({
             "year": year,
-            "first_score": g.iloc[0][score_col],
-            "podium_mean": g.head(3)[score_col].mean(),
-            "top10_mean": g.head(10)[score_col].mean(),
-            "rank10_score": g.iloc[9][score_col] if len(g) >= 10 else np.nan,
+            "first_score": g[g["Rank"] == 1][score_col].mean(),
+            "podium_mean": g[g["Rank"] <= 3][score_col].mean(),
+            "top10_mean": g[g["Rank"] <= 10][score_col].mean(),
+            "rank10_score": g[g["Rank"] == 10][score_col].mean(),
         })
 
     if not rows:
@@ -262,23 +264,22 @@ def annual_world_stats(
         & (world_data["sexe"] == sexe)
     ].copy()
 
-    sub = sub.dropna(subset=[score_col, "year", "competition", "event"])
-    sub = sub[sub[score_col] > 0]
+    sub = sub.dropna(subset=["Rank", score_col, "year", "competition", "event"])
+    sub["Rank"] = pd.to_numeric(sub["Rank"], errors="coerce")
+    sub = sub.dropna(subset=["Rank"])
+    sub["Rank"] = sub["Rank"].astype(int)
 
     rows = []
 
     for keys, g in sub.groupby(["year", "competition", "event"], dropna=False):
         year = keys[0]
 
-        # On trie par score décroissant
-        g = g.sort_values(score_col, ascending=False).reset_index(drop=True)
-
         rows.append({
             "year": year,
-            "world_first_score": g.iloc[0][score_col],
-            "world_podium_mean": g.head(3)[score_col].mean(),
-            "world_top10_mean": g.head(10)[score_col].mean(),
-            "world_rank10_score": g.iloc[9][score_col] if len(g) >= 10 else np.nan,
+            "world_first_score": g[g["Rank"] == 1][score_col].mean(),
+            "world_podium_mean": g[g["Rank"] <= 3][score_col].mean(),
+            "world_top10_mean": g[g["Rank"] <= 10][score_col].mean(),
+            "world_rank10_score": g[g["Rank"] == 10][score_col].mean(),
         })
 
     if not rows:
@@ -324,21 +325,21 @@ def plot_annual_scores(
         x=stats["year"],
         y=stats["first_score"],
         mode="lines+markers",
-        name="CDF — 1er score",
+        name="CDF — 1er",
     ))
 
     fig.add_trace(go.Scatter(
         x=stats["year"],
         y=stats["podium_mean"],
         mode="lines+markers",
-        name="CDF — Moyenne top 3 scores",
+        name="CDF — Moyenne podium",
     ))
 
     fig.add_trace(go.Scatter(
         x=stats["year"],
         y=stats["top10_mean"],
         mode="lines+markers",
-        name="CDF — Moyenne top 10 scores",
+        name="CDF — Moyenne top 10",
     ))
 
     world_stats = annual_world_stats(
@@ -353,7 +354,7 @@ def plot_annual_scores(
             x=world_stats["year"],
             y=world_stats["world_first_score"],
             mode="lines+markers",
-            name="World Cup — 1er score",
+            name="World Cup — 1er",
             line=dict(dash="dash"),
         ))
 
@@ -361,7 +362,7 @@ def plot_annual_scores(
             x=world_stats["year"],
             y=world_stats["world_podium_mean"],
             mode="lines+markers",
-            name="World Cup — Moyenne top 3 scores",
+            name="World Cup — Moyenne podium",
             line=dict(dash="dot"),
         ))
 
@@ -369,7 +370,7 @@ def plot_annual_scores(
             x=world_stats["year"],
             y=world_stats["world_top10_mean"],
             mode="lines+markers",
-            name="World Cup — Moyenne top 10 scores",
+            name="World Cup — Moyenne top 10",
             line=dict(dash="longdash"),
         ))
 
@@ -456,28 +457,28 @@ def plot_athlete_vs_category_by_year(
         y=stats["first_score"],
         mode="lines",
         fill="tonexty",
-        name="CDF — Couloir top 1-top 10",
+        name="CDF — Couloir 1er-10e",
     ))
 
     fig.add_trace(go.Scatter(
         x=stats["year"],
         y=stats["first_score"],
         mode="lines+markers",
-        name="CDF — 1er score catégorie",
+        name="CDF — 1er catégorie",
     ))
 
     fig.add_trace(go.Scatter(
         x=stats["year"],
         y=stats["podium_mean"],
         mode="lines+markers",
-        name="CDF — Moyenne top 3 catégorie",
+        name="CDF — Moyenne podium",
     ))
 
     fig.add_trace(go.Scatter(
         x=stats["year"],
         y=stats["top10_mean"],
         mode="lines+markers",
-        name="CDF — Moyenne top 10 catégorie",
+        name="CDF — Moyenne top 10",
     ))
 
     fig.add_trace(go.Scatter(
@@ -512,7 +513,7 @@ def plot_athlete_vs_category_by_year(
                     x=world_stats["year"],
                     y=world_stats["world_first_score"],
                     mode="lines+markers",
-                    name="World Cup — 1er score",
+                    name="World Cup — 1er",
                     line=dict(dash="dash"),
                 ))
 
@@ -520,7 +521,7 @@ def plot_athlete_vs_category_by_year(
                     x=world_stats["year"],
                     y=world_stats["world_podium_mean"],
                     mode="lines+markers",
-                    name="World Cup — Moyenne top 3",
+                    name="World Cup — Moyenne podium",
                     line=dict(dash="dot"),
                 ))
 
@@ -669,7 +670,7 @@ df = prepare_data(raw) if not raw.empty else pd.DataFrame()
 world_df = load_world_data("csv")
 
 st.title("Analyse CDF — version Streamlit")
-st.caption("Analyse automatique des CSV du dossier csv/ avec comparaison World Cup")
+st.caption("Analyse automatique des CSV du dossier csv/ avec comparaison World Cup Rifle")
 
 if raw.empty:
     st.error("Aucun fichier CSV CDF trouvé dans le dossier 'csv/'.")
@@ -684,7 +685,7 @@ col1.metric("Lignes brutes CDF", len(raw))
 col2.metric("Lignes analysables CDF", len(df))
 col3.metric("Athlètes CDF", df["athlete"].nunique())
 col4.metric("Années CDF", int(df["year"].nunique()) if df["year"].notna().any() else 0)
-col5.metric("Lignes World Cup", len(world_df))
+col5.metric("Lignes World Cup Rifle", len(world_df))
 
 st.divider()
 
@@ -727,7 +728,7 @@ score_col = "Total_normalise"
 # Graphique global
 # =========================
 
-st.subheader("Graphique global CDF vs World Cup")
+st.subheader("Graphique global CDF vs World Cup Rifle")
 
 fig_global = plot_annual_scores(
     df,
@@ -768,7 +769,7 @@ if fig_athlete_context is not None:
     st.plotly_chart(fig_athlete_context, use_container_width=True)
 
     st.caption(
-        "Les lignes CDF / World Cup sont calculées sur les meilleurs scores, pas uniquement sur le Rank final."
+        "Les lignes World Cup affichent uniquement les épreuves Rifle / Carabine."
     )
 
     st.dataframe(athlete_context_stats, use_container_width=True)
@@ -847,7 +848,7 @@ if not world_df.empty:
         & (world_df["discipline"] == selected_disc)
     ].copy()
 
-    with st.expander("Voir les données World Cup filtrées"):
+    with st.expander("Voir les données World Cup Rifle filtrées"):
         st.dataframe(world_filtered, use_container_width=True)
 
 st.download_button(
