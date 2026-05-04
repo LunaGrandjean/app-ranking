@@ -206,32 +206,44 @@ def annual_stats(
     categorie_age: str,
     score_col: str = "Total"
 ) -> pd.DataFrame:
+
     sub = data[
         (data["discipline"] == discipline)
         & (data["sexe"] == sexe)
         & (data["categorie_age"] == categorie_age)
     ].copy()
 
-    sub = sub.dropna(subset=["Rank", score_col, "year"])
+    sub = sub.dropna(subset=["Rank", score_col, "year", "competition"])
     sub["Rank"] = pd.to_numeric(sub["Rank"], errors="coerce")
     sub = sub.dropna(subset=["Rank"])
     sub["Rank"] = sub["Rank"].astype(int)
 
-    out = []
+    rows = []
 
-    for year, g in sub.groupby("year"):
+    group_cols = ["year", "competition", "Épreuve"]
+
+    for keys, g in sub.groupby(group_cols, dropna=False):
+        year = keys[0]
         g = g.sort_values("Rank")
 
-        out.append({
+        first = g[g["Rank"] == 1][score_col].mean()
+        podium = g[g["Rank"] <= 3][score_col].mean()
+        top10 = g[g["Rank"] <= 10][score_col].mean()
+        rank10 = g[g["Rank"] == 10][score_col].mean()
+
+        rows.append({
             "year": year,
-            "first_score": g.loc[g["Rank"] == 1, score_col].mean(),
-            "podium_mean": g[g["Rank"] <= 3][score_col].mean(),
-            "top10_mean": g[g["Rank"] <= 10][score_col].mean(),
-            "rank10_score": g.loc[g["Rank"] == 10, score_col].mean(),
+            "first_score": first,
+            "podium_mean": podium,
+            "top10_mean": top10,
+            "rank10_score": rank10,
         })
 
-    return pd.DataFrame(out).sort_values("year") if out else pd.DataFrame()
+    if not rows:
+        return pd.DataFrame()
 
+    yearly = pd.DataFrame(rows).groupby("year", as_index=False).mean(numeric_only=True)
+    return yearly.sort_values("year")
 
 def annual_world_stats(
     world_data: pd.DataFrame,
@@ -239,6 +251,7 @@ def annual_world_stats(
     sexe: str,
     score_col: str = "Total"
 ) -> pd.DataFrame:
+
     if world_data.empty:
         return pd.DataFrame()
 
@@ -247,25 +260,30 @@ def annual_world_stats(
         & (world_data["sexe"] == sexe)
     ].copy()
 
-    sub = sub.dropna(subset=["Rank", score_col, "year"])
+    sub = sub.dropna(subset=["Rank", score_col, "year", "competition", "event"])
     sub["Rank"] = pd.to_numeric(sub["Rank"], errors="coerce")
     sub = sub.dropna(subset=["Rank"])
     sub["Rank"] = sub["Rank"].astype(int)
 
-    out = []
+    rows = []
 
-    for year, g in sub.groupby("year"):
+    for keys, g in sub.groupby(["year", "competition", "event"], dropna=False):
+        year = keys[0]
         g = g.sort_values("Rank")
 
-        out.append({
+        rows.append({
             "year": year,
-            "world_first_score": g.loc[g["Rank"] == 1, score_col].mean(),
+            "world_first_score": g[g["Rank"] == 1][score_col].mean(),
             "world_podium_mean": g[g["Rank"] <= 3][score_col].mean(),
             "world_top10_mean": g[g["Rank"] <= 10][score_col].mean(),
-            "world_rank10_score": g.loc[g["Rank"] == 10, score_col].mean(),
+            "world_rank10_score": g[g["Rank"] == 10][score_col].mean(),
         })
 
-    return pd.DataFrame(out).sort_values("year") if out else pd.DataFrame()
+    if not rows:
+        return pd.DataFrame()
+
+    yearly = pd.DataFrame(rows).groupby("year", as_index=False).mean(numeric_only=True)
+    return yearly.sort_values("year")
 
 
 def plot_annual_scores(
@@ -363,12 +381,12 @@ def plot_annual_scores(
 
     return fig
 
-
 def plot_athlete_vs_category_by_year(
     data: pd.DataFrame,
     athlete_name: str,
     discipline: str,
     score_col: str = "Total",
+    world_data: pd.DataFrame = pd.DataFrame()
 ):
     athlete_norm = normalize_athlete_name(athlete_name)
 
@@ -397,8 +415,23 @@ def plot_athlete_vs_category_by_year(
             & (data["categorie_age"] == categorie)
         ].copy()
 
-        same_context = same_context.dropna(subset=["Rank", score_col])
-        same_context["Rank"] = same_context["Rank"].astype(int)
+        cdf_stats = annual_stats(
+            same_context,
+            discipline,
+            sexe,
+            categorie,
+            score_col=score_col
+        )
+
+        if not cdf_stats.empty:
+            cdf_year = cdf_stats[cdf_stats["year"] == year]
+        else:
+            cdf_year = pd.DataFrame()
+
+        if not cdf_year.empty:
+            cdf_row = cdf_year.iloc[0]
+        else:
+            cdf_row = {}
 
         rows.append({
             "year": year,
@@ -406,10 +439,10 @@ def plot_athlete_vs_category_by_year(
             "athlete_rank": athlete_row["Rank"],
             "categorie_age": categorie,
             "sexe": sexe,
-            "first_score": same_context.loc[same_context["Rank"] == 1, score_col].mean(),
-            "podium_mean": same_context.loc[same_context["Rank"] <= 3, score_col].mean(),
-            "top10_mean": same_context.loc[same_context["Rank"] <= 10, score_col].mean(),
-            "rank10_score": same_context.loc[same_context["Rank"] == 10, score_col].mean(),
+            "first_score": cdf_row.get("first_score", np.nan),
+            "podium_mean": cdf_row.get("podium_mean", np.nan),
+            "top10_mean": cdf_row.get("top10_mean", np.nan),
+            "rank10_score": cdf_row.get("rank10_score", np.nan),
         })
 
     stats = pd.DataFrame(rows).sort_values("year")
@@ -430,28 +463,28 @@ def plot_athlete_vs_category_by_year(
         y=stats["first_score"],
         mode="lines",
         fill="tonexty",
-        name="Couloir 1er-10e catégorie réelle",
+        name="CDF — Couloir 1er-10e catégorie réelle",
     ))
 
     fig.add_trace(go.Scatter(
         x=stats["year"],
         y=stats["first_score"],
         mode="lines+markers",
-        name="1er catégorie",
+        name="CDF — 1er catégorie",
     ))
 
     fig.add_trace(go.Scatter(
         x=stats["year"],
         y=stats["podium_mean"],
         mode="lines+markers",
-        name="Moyenne podium catégorie",
+        name="CDF — Moyenne podium",
     ))
 
     fig.add_trace(go.Scatter(
         x=stats["year"],
         y=stats["top10_mean"],
         mode="lines+markers",
-        name="Moyenne top 10 catégorie",
+        name="CDF — Moyenne top 10",
     ))
 
     fig.add_trace(go.Scatter(
@@ -461,15 +494,47 @@ def plot_athlete_vs_category_by_year(
         name=athlete_name,
         text=stats["categorie_age"],
         textposition="top center",
-        hovertemplate=(
-            "Année=%{x}<br>"
-            "Score=%{y:.2f}<br>"
-            "Catégorie=%{text}<extra></extra>"
-        ),
     ))
 
+    athlete_sexes = stats["sexe"].dropna().unique()
+
+    if len(athlete_sexes) > 0 and not world_data.empty:
+        athlete_sexe = athlete_sexes[0]
+
+        world_stats = annual_world_stats(
+            world_data,
+            discipline,
+            athlete_sexe,
+            score_col="Total"
+        )
+
+        if not world_stats.empty:
+            fig.add_trace(go.Scatter(
+                x=world_stats["year"],
+                y=world_stats["world_first_score"],
+                mode="lines+markers",
+                name="World Cup — 1er",
+                line=dict(dash="dash"),
+            ))
+
+            fig.add_trace(go.Scatter(
+                x=world_stats["year"],
+                y=world_stats["world_podium_mean"],
+                mode="lines+markers",
+                name="World Cup — Moyenne podium",
+                line=dict(dash="dot"),
+            ))
+
+            fig.add_trace(go.Scatter(
+                x=world_stats["year"],
+                y=world_stats["world_top10_mean"],
+                mode="lines+markers",
+                name="World Cup — Moyenne top 10",
+                line=dict(dash="longdash"),
+            ))
+
     fig.update_layout(
-        title=f"Évolution 2016-2026 — {athlete_name} vs sa catégorie réelle",
+        title=f"Évolution 2016-2026 — {athlete_name} vs CDF et niveau mondial",
         xaxis_title="Année",
         yaxis_title="Score",
         template="plotly_white",
@@ -477,7 +542,6 @@ def plot_athlete_vs_category_by_year(
     )
 
     return fig, stats
-
 
 def plot_athlete_score(
     data: pd.DataFrame,
@@ -694,7 +758,8 @@ fig_athlete_context, athlete_context_stats = plot_athlete_vs_category_by_year(
     df,
     selected_athlete,
     selected_disc,
-    score_col=score_col
+    score_col=score_col,
+    world_data=world_df
 )
 
 if fig_athlete_context is not None:
