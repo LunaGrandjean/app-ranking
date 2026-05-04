@@ -115,17 +115,19 @@ def prepare_data(raw: pd.DataFrame) -> pd.DataFrame:
 
     df["nb_series"] = df[SERIES_COLS].notna().sum(axis=1)
 
-    df["Total_normalise_6"] = df["Total"]
+    df["Total_normalise"] = df["Total"]
 
-    # 10m : normalisation sur 6 séries
+    # 10m CDF : normalisation selon le nombre de séries
     mask_10m = (df["discipline"] == "10m") & (df["nb_series"] > 0)
-    df.loc[mask_10m, "Total_normalise_6"] = (
+    df.loc[mask_10m, "Total_normalise"] = (
         df.loc[mask_10m, "Total"] * 6 / df.loc[mask_10m, "nb_series"]
     )
 
-    # 50m : anciens formats > 900, on divise par 2
-    mask_50m_old = (df["discipline"] == "50m") & (df["Total"] > 900)
-    df.loc[mask_50m_old, "Total_normalise_6"] = df.loc[mask_50m_old, "Total"] / 2
+    # 50m CDF uniquement : si score > 900, on divise par 2
+    mask_50m_cdf_old = (df["discipline"] == "50m") & (df["Total"] > 900)
+    df.loc[mask_50m_cdf_old, "Total_normalise"] = (
+        df.loc[mask_50m_cdf_old, "Total"] / 2
+    )
 
     df["athlete"] = df["about"].apply(normalize_athlete_name)
 
@@ -188,11 +190,8 @@ def load_world_data(path: str) -> pd.DataFrame:
     df["categorie_age"] = "Senior"
     df["competition_level"] = "World Cup"
 
-    df["Total_normalise_6"] = df["Total"]
-
-    # 50m World Cup : anciens formats > 900 divisés par 2
-    mask_50m_old = (df["discipline"] == "50m") & (df["Total"] > 900)
-    df.loc[mask_50m_old, "Total_normalise_6"] = df.loc[mask_50m_old, "Total"] / 2
+    # IMPORTANT : World Cup jamais normalisé
+    df["Total_normalise"] = df["Total"]
 
     df = df[
         (df["Rank"].notna())
@@ -212,7 +211,7 @@ def annual_stats(
     discipline: str,
     sexe: str,
     categorie_age: str,
-    score_col: str = "Total_normalise_6"
+    score_col: str = "Total_normalise"
 ) -> pd.DataFrame:
 
     sub = data[
@@ -230,7 +229,7 @@ def annual_stats(
     for keys, g in sub.groupby(group_cols, dropna=False):
         year = keys[0]
 
-        # On trie par score décroissant, pas par Rank
+        # On trie par score décroissant, pas par rank final
         g = g.sort_values(score_col, ascending=False).reset_index(drop=True)
 
         rows.append({
@@ -252,7 +251,7 @@ def annual_world_stats(
     world_data: pd.DataFrame,
     discipline: str,
     sexe: str,
-    score_col: str = "Total_normalise_6"
+    score_col: str = "Total_normalise"
 ) -> pd.DataFrame:
 
     if world_data.empty:
@@ -271,7 +270,7 @@ def annual_world_stats(
     for keys, g in sub.groupby(["year", "competition", "event"], dropna=False):
         year = keys[0]
 
-        # On trie par score décroissant, pas par Rank
+        # On trie par score décroissant
         g = g.sort_values(score_col, ascending=False).reset_index(drop=True)
 
         rows.append({
@@ -294,7 +293,7 @@ def plot_annual_scores(
     discipline: str,
     sexe: str,
     categorie_age: str,
-    score_col: str = "Total_normalise_6",
+    score_col: str = "Total_normalise",
     world_data: pd.DataFrame = pd.DataFrame()
 ):
     stats = annual_stats(df, discipline, sexe, categorie_age, score_col=score_col)
@@ -346,7 +345,7 @@ def plot_annual_scores(
         world_data,
         discipline,
         sexe,
-        score_col="Total_normalise_6"
+        score_col="Total_normalise"
     )
 
     if not world_stats.empty:
@@ -377,7 +376,7 @@ def plot_annual_scores(
     fig.update_layout(
         title=f"Évolution annuelle des scores — {discipline} / {sexe} / {categorie_age}",
         xaxis_title="Année",
-        yaxis_title="Score normalisé",
+        yaxis_title="Score",
         template="plotly_white",
         hovermode="x unified",
     )
@@ -389,7 +388,7 @@ def plot_athlete_vs_category_by_year(
     data: pd.DataFrame,
     athlete_name: str,
     discipline: str,
-    score_col: str = "Total_normalise_6",
+    score_col: str = "Total_normalise",
     world_data: pd.DataFrame = pd.DataFrame()
 ):
     athlete_norm = normalize_athlete_name(athlete_name)
@@ -425,10 +424,7 @@ def plot_athlete_vs_category_by_year(
             score_col=score_col
         )
 
-        if not cdf_year_stats.empty:
-            cdf_row = cdf_year_stats.iloc[0]
-        else:
-            cdf_row = {}
+        cdf_row = cdf_year_stats.iloc[0] if not cdf_year_stats.empty else {}
 
         rows.append({
             "year": year,
@@ -508,7 +504,7 @@ def plot_athlete_vs_category_by_year(
                 world_data,
                 discipline,
                 athlete_sexe,
-                score_col="Total_normalise_6"
+                score_col="Total_normalise"
             )
 
             if not world_stats.empty:
@@ -539,7 +535,7 @@ def plot_athlete_vs_category_by_year(
     fig.update_layout(
         title=f"Évolution 2016-2026 — {athlete_name} vs CDF et niveau mondial",
         xaxis_title="Année",
-        yaxis_title="Score normalisé",
+        yaxis_title="Score",
         template="plotly_white",
         hovermode="x unified",
     )
@@ -575,17 +571,17 @@ def plot_athlete_score(
     fig = px.line(
         sub,
         x="year",
-        y="Total_normalise_6",
+        y="Total_normalise",
         color="categorie_age",
         markers=True,
         hover_data=["Rank", "discipline", "sexe", "source_pdf", "Total"],
-        title=f"Évolution du score normalisé — {athlete_name} ({discipline})",
+        title=f"Évolution du score — {athlete_name} ({discipline})",
     )
 
     fig.update_layout(
         template="plotly_white",
         xaxis_title="Année",
-        yaxis_title="Score normalisé"
+        yaxis_title="Score"
     )
 
     return fig
@@ -622,7 +618,7 @@ def plot_athlete_rank(
         y="Rank",
         color="categorie_age",
         markers=True,
-        hover_data=["Total", "Total_normalise_6", "discipline", "sexe", "source_pdf"],
+        hover_data=["Total", "Total_normalise", "discipline", "sexe", "source_pdf"],
         title=f"Évolution du rank — {athlete_name} ({discipline})",
     )
 
@@ -659,7 +655,7 @@ def athlete_summary(
     return sub[
         [
             "about", "year", "discipline", "sexe", "categorie_age",
-            "Rank", "Total", "Total_normalise_6", "source_pdf"
+            "Rank", "Total", "Total_normalise", "source_pdf"
         ]
     ].sort_values(["discipline", "year"])
 
@@ -673,7 +669,7 @@ df = prepare_data(raw) if not raw.empty else pd.DataFrame()
 world_df = load_world_data("csv")
 
 st.title("Analyse CDF — version Streamlit")
-st.caption("Page 1 : analyse automatique des CSV du dossier csv/ avec comparaison World Cup")
+st.caption("Analyse automatique des CSV du dossier csv/ avec comparaison World Cup")
 
 if raw.empty:
     st.error("Aucun fichier CSV CDF trouvé dans le dossier 'csv/'.")
@@ -725,7 +721,7 @@ if filtered_df.empty:
     st.warning("Aucune donnée pour cette combinaison.")
     st.stop()
 
-score_col = "Total_normalise_6"
+score_col = "Total_normalise"
 
 # =========================
 # Graphique global
