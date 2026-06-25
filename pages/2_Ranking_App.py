@@ -688,7 +688,7 @@ if st.session_state["final_tbl"] is not None:
                         ws.conditional_formatting.add(cell_range, CellIsRule(operator="lessThan", formula=["30"], fill=red))
                         ws.conditional_formatting.add(cell_range, CellIsRule(operator="between", formula=["30", "70"], fill=orange))
                         ws.conditional_formatting.add(cell_range, CellIsRule(operator="greaterThan", formula=["70"], fill=green))
-
+                                
             st.download_button(
                 "Télécharger XLSX",
                 data=out.getvalue(),
