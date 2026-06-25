@@ -681,7 +681,7 @@ if st.session_state["final_tbl"] is not None:
                 green = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
 
                 headers = [c.value for c in ws[1]]
-                for name in ["%S", "%J"]:
+                for name in ["%S compet", "%J compet"]:
                     if name in headers:
                         col_letter = ws.cell(row=1, column=headers.index(name) + 1).column_letter
                         cell_range = f"{col_letter}2:{col_letter}{ws.max_row}"
