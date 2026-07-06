@@ -342,9 +342,11 @@ def default_final_points():
     })
 
 
-def add_date_coeff(df: pd.DataFrame, date_ref: dt.date) -> pd.DataFrame:
+def add_date_coeff(df: pd.DataFrame, date_ref: dt.date, full_weight_months: int = 4) -> pd.DataFrame:
     df = df.copy()
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.date
+
+    full_weight_days = int(full_weight_months * 30.5)
 
     def f(d):
         if pd.isna(d):
@@ -352,13 +354,13 @@ def add_date_coeff(df: pd.DataFrame, date_ref: dt.date) -> pd.DataFrame:
 
         age_days = (date_ref - d).days
 
-        if age_days <= 122:
+        if age_days <= full_weight_days:
             return 1.0
         if age_days >= 365:
             return 0.0
 
         k = 3.0
-        x = (365 - age_days) / (365 - 122)
+        x = (365 - age_days) / (365 - full_weight_days)
         return (1 - np.exp(-k * x)) / (1 - np.exp(-k))
 
     df["date_coeff"] = df["Date"].apply(f)
@@ -476,6 +478,13 @@ st.divider()
 st.subheader("Date de référence pour le coeff temps")
 date_ref_input = st.date_input("Date de référence", value=dt.date.today())
 
+full_weight_months = st.selectbox(
+    "Dégradation du temps : garder le poids complet pendant",
+    options=[1, 2, 4],
+    index=2,
+    format_func=lambda x: f"{x} mois"
+)
+
 st.divider()
 
 st.subheader("Points de finale (Rank → Points)")
@@ -573,7 +582,7 @@ if run:
 
     df["Age Category"] = df["Age Category"].fillna(df["Category"].apply(default_age_category))
 
-    df = add_date_coeff(df, date_ref_input)
+    df = add_date_coeff(df, date_ref_input, full_weight_months)
 
     df["ScaleKey_S"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], "S"), axis=1)
     df["ScaleKey_J"] = df.apply(lambda r: scale_key(r["Distance"], r["Sexe"], r["Category"]), axis=1)
